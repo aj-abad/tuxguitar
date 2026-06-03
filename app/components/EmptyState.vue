@@ -1,6 +1,6 @@
 <template>
   <div
-    class="h-full flex flex-col items-center justify-center opacity-40 cursor-pointer hover:opacity-60 transition-opacity"
+    class="text-white h-full flex flex-col items-center justify-center opacity-40 cursor-pointer hover:opacity-60 transition-opacity"
     @click="openFile">
     <PhMusicNote class="size-20 mb-4" />
     <p class="mb-1">Open a file to get started</p>

@@ -1,9 +1,9 @@
 <template>
-  <div class="size-full flex justify-center">
-    <div class="w-[21cm] min-h-[29.7cm] flex m-4 bg-white rounded-xl shadow-lg p-8">
+  <ScrollArea root-class="size-full">
+    <div class="w-[21cm] min-h-[29.7cm] flex mx-auto my-4 bg-white rounded-xl shadow-lg p-8">
       <div class="flex-1 relative overflow-hidden" ref="container" />
     </div>
-  </div>
+  </ScrollArea>
 </template>
 
 <script setup lang="ts">

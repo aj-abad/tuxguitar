@@ -1,23 +1,34 @@
 <template>
   <aside
-    class="absolute left-4 top-4 z-20 flex max-h-[calc(100%-2rem)] w-[200px] flex-col overflow-hidden rounded-2xl bg-black/70 text-white/90 shadow-2xl ring-1 ring-white/10 backdrop-blur-2xl"
+    class="absolute left-4 top-4 z-20 flex max-h-[calc(100%-2rem)] w-64 flex-col overflow-hidden rounded-2xl bg-zinc-800 text-white/90 shadow-2xl border border-white/10"
     style="-webkit-app-region: no-drag">
     <!-- Header -->
     <header
-      class="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2.5">
+      class="flex shrink-0 items-center gap-2 border-b border-transparent px-3 py-2.5 transition-colors"
+      :class="open && 'border-white/10'">
       <PhSlidersHorizontal class="size-4 opacity-70" />
       <span class="text-xs font-medium tracking-wide">Edit Tools</span>
       <span class="grow" />
       <button
         class="rounded p-0.5 opacity-50 transition hover:bg-white/10 hover:opacity-100"
-        :title="collapsed ? 'Expand' : 'Collapse'"
-        @click="collapsed = !collapsed">
-        <PhCaretUp class="size-3.5 transition-transform" :class="collapsed && 'rotate-180'" />
+        :title="open ? 'Collapse' : 'Expand'"
+        @click="open = !open">
+        <PhCaretUp class="size-3.5 transition-transform" :class="!open && 'rotate-180'" />
       </button>
     </header>
 
     <!-- Body -->
-    <div v-show="!collapsed" class="flex flex-col gap-4 overflow-y-auto p-3">
+    <AnimatePresence :initial="false">
+      <motion.div
+        v-if="open"
+        key="body"
+        class="overflow-hidden"
+        :initial="{ height: 0, opacity: 0 }"
+        :animate="{ height: 'auto', opacity: 1 }"
+        :exit="{ height: 0, opacity: 0 }"
+        :transition="{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }">
+        <ScrollArea root-class="h-auto" viewport-class="h-auto max-h-[75vh] p-3">
+          <div class="flex flex-col gap-4">
       <!-- Duration -->
       <section>
         <h3 :class="labelClass">Duration</h3>
@@ -99,7 +110,10 @@
           </button>
         </div>
       </section>
-    </div>
+          </div>
+        </ScrollArea>
+      </motion.div>
+    </AnimatePresence>
   </aside>
 </template>
 
@@ -130,6 +144,7 @@ import {
   PhWaveSine,
   PhWaveTriangle,
 } from "@phosphor-icons/vue";
+import { AnimatePresence, motion } from "motion-v";
 import { ref } from "vue";
 
 // Shared Tailwind class strings
@@ -140,7 +155,7 @@ const btnClass =
 const activeClass = "bg-white/15 text-white ring-1 ring-white/20";
 
 // Purely visual local selection (not wired to the model yet)
-const collapsed = ref(false);
+const open = ref(true);
 const selectedDuration = ref("4");
 const selectedDynamic = ref("mf");
 
