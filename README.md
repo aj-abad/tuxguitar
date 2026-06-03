@@ -1,22 +1,92 @@
-# TuxGuitar
+# TuxGuitar (macOS)
 
 ## Description
 
-TuxGuitar is an open source multitrack tablature editor and player written in Java.
+TuxGuitar is an open source multitrack guitar tablature editor and player written in Java.
 
-## Download and installation
+**This fork builds the macOS (SWT/Cocoa) version only.** All other platform targets
+(Linux, Windows, FreeBSD, Android) have been removed.
 
-The official website for TuxGuitar is https://www.tuxguitar.app/.
+## Download
 
-You can find ready to use installation packages for Linux, Windows, macOS, FreeBSD and Android here: [releases](https://github.com/helge17/tuxguitar/releases/).
+This fork does not publish prebuilt packages — see [Build from source](#build-from-source-macos) below.
 
-Please download TuxGuitar only from the website or the GitHub link provided above.
+Ready-to-use installation packages for the original multi-platform project (Linux, Windows,
+macOS, FreeBSD, Android) are available on the upstream
+[releases](https://github.com/helge17/tuxguitar/releases/) page.
 
-To build TuxGuitar from source code, refer to the [INSTALL.md](INSTALL.md) file.
+## Build from source (macOS)
+
+### Prerequisites
+
+- JDK 17 or higher (CI uses 21)
+- Maven 3.3 or higher
+- Eclipse SWT 4.37 (cocoa/macosx)
+
+On macOS you need [Homebrew](https://brew.sh) to install the build tools:
+
+```sh
+$ brew install openjdk maven wget
+```
+
+### Install SWT for macOS
+
+Eclipse SWT is not on Maven Central, so install it into your local Maven repo first:
+
+```sh
+$ TUX_ARCH=`uname -m | sed 's/arm64/aarch64/'`
+$ wget https://download.eclipse.org/eclipse/downloads/drops4/R-4.37-202509050730/swt-4.37-cocoa-macosx-${TUX_ARCH}.zip
+$ mkdir swt-4.37-cocoa-macosx-${TUX_ARCH}
+$ cd swt-4.37-cocoa-macosx-${TUX_ARCH}
+$ unzip ../swt-4.37-cocoa-macosx-${TUX_ARCH}.zip
+$ mvn install:install-file -Dfile=swt.jar -DgroupId=org.eclipse.swt -DartifactId=org.eclipse.swt.cocoa.macosx -Dpackaging=jar -Dversion=4.37
+$ cd ..
+```
+
+### Build and start TuxGuitar
+
+The buildable assembly module is `desktop/build-scripts/tuxguitar-macosx-swt-cocoa`, which
+aggregates every other module into a macOS `.app` bundle:
+
+```sh
+$ cd desktop/build-scripts/tuxguitar-macosx-swt-cocoa
+$ mvn -e clean verify                 # matches CI (.github/workflows/macos-maven.yml)
+$ cd -
+```
+
+The application is now located at
+`desktop/build-scripts/tuxguitar-macosx-swt-cocoa/target/tuxguitar-9.99-SNAPSHOT-macosx-swt-cocoa.app`.
+Start TuxGuitar by double-clicking it.
+
+To additionally compile the native AudioUnit MIDI bridge
+(`desktop/TuxGuitar-AudioUnit`), add the `native-modules` profile. This requires the
+Xcode command line tools (`make`):
+
+```sh
+$ mvn -e clean verify -P native-modules
+```
+
+### Troubleshooting
+
+There may be some cases where the build fails. A few examples (not an exhaustive list):
+
+- TuxGuitar sources have been placed in a folder whose absolute path contains non-ASCII characters
+- During development of a feature some unit tests are broken
+- other configuration-specific issues
+
+In these cases it is possible to build TuxGuitar without running the unit tests by adding
+the `-DskipTests` flag to the build command:
+
+```sh
+$ mvn -e clean verify -DskipTests
+```
+
+Note that disabling unit tests is **not recommended**.
 
 ## Contribute
 
-If you want to contribute to TuxGuitar, you will find a helpful description in the [CONTRIBUTING.md](docs/CONTRIBUTING.md) file.
+Issues and pull requests are welcome on the
+[project's GitHub repository](https://github.com/helge17/tuxguitar).
 
 ## License
 
@@ -29,8 +99,7 @@ Copyright (C) 2005-2022 Julián Casadesús
 
 TuxGuitar includes the following third party products:
 
-* SWT version: SWT (Standard Widget Toolkit): https://www.eclipse.org/swt/
-* JFX version: JavaFX (Java client application platform): https://openjfx.io/
+* SWT (Standard Widget Toolkit): https://www.eclipse.org/swt/
 * Gervill (Java Software Synthesizer)
 * iText (Free Java-PDF library): https://itextpdf.com/
 * Magic Sound Font v2.0 - Contributed by Dennis Deutschmann

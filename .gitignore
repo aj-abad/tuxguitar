@@ -6,9 +6,49 @@ target/
 *.bin
 **/jni/*.dll
 **/jni/*.so
+**/jni/*.jnilib
+**/jni/*.dylib
 .classpath
 .settings/
 .project
-android/build-scripts/tuxguitar-android/local.properties
-android/build-scripts/tuxguitar-android/.idea/
 .DS_Store
+
+# node / pnpm
+node_modules/
+# SWT download cache (scripts/install-swt.sh)
+.swt-cache/
+
+
+# Nuxt dev/build outputs
+.output
+.data
+.nuxt
+.nitro
+.cache
+dist
+
+# Logs
+logs
+*.log
+
+# Misc
+.fleet
+.idea
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+dist-electron
+# electron-builder output
+release/
+*.dmg
+
+# single-instance dev lock (scripts/dev.mjs)
+.dev.lock
+
+# Rust sidecar build artifacts
+sidecar/bin/tuxguitar-sidecar
+sidecar/bin/*.sf2
+sidecar/bin/*.jar

@@ -1,0 +1,48 @@
+{
+  "name": "tabbycat",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Tabbycat — Electron + Nuxt rewrite of TuxGuitar",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "icons": "node scripts/gen-icons.mjs",
+    "dev": "node scripts/dev-guard.mjs && pnpm run icons && TMPDIR=/tmp nuxt dev",
+    "generate": "pnpm run icons && nuxt generate",
+    "build": "pnpm run generate",
+    "preview": "pnpm run generate && electron .",
+    "smoke": "pnpm run generate && TG_SMOKE=1 electron .",
+    "dist": "pnpm run generate && electron-builder --mac",
+    "sidecar:build": "bash sidecar/build.sh",
+    "ai:tgx": "node scripts/ai/run.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "postinstall": "nuxt prepare"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.1",
+    "@tailwindcss/vite": "^4.2.1",
+    "electron": "^42.3.2",
+    "electron-builder": "^26.8.1",
+    "nuxt-electron": "^0.7.0",
+    "tailwindcss": "^4.2.1",
+    "vite-plugin-electron": "^1.0.0",
+    "vite-plugin-electron-renderer": "^1.0.0",
+    "vitest": "^4.1.8"
+  },
+  "dependencies": {
+    "@coderline/alphatab": "^1.8.3",
+    "@coderline/alphatab-vite": "^1.8.3",
+    "@phosphor-icons/vue": "^2.2.1",
+    "fast-xml-parser": "^5.8.0",
+    "fflate": "^0.8.3",
+    "geist": "^1.7.2",
+    "nuxt": "^4.4.6",
+    "tailwind-merge": "^3.5.0",
+    "vue": "^3.5.34",
+    "vue-router": "^5.0.7"
+  },
+  "main": "dist-electron/main.js"
+}

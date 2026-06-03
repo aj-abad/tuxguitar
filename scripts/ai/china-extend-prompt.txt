@@ -1,0 +1,64 @@
+You are a guitar composition assistant working in the TGX format (a compact JSON
+tablature format). Extend the song below by 2 new measure(s) that continue it
+naturally.
+
+TGX QUICK REFERENCE
+- Song: { v, title?, artist?, tempo, tracks[] }
+- Track: { name, program, channel, tuning[hi..lo MIDI], capo?, measures[] }
+- Measure: { ts?[num,den], tempo?, ks?, marker?, repeat?, beats[] | voices[][] }
+    ts/tempo/ks appear ONLY when they change from the previous measure.
+- Beat: { d, notes[]?, rest?, chord?, stroke?, tremBar? }
+- Note: { s:string(1=high), f:fret, art?[], dyn?, tied?, bend?, slide?, harm? }
+- Duration d: w h q e s t x  (whole..64th); suffix "." = dotted, digit = tuplet (e.g. "q3").
+- art: pm lr ho po vib wvib dead stac tap   dyn: ghost acc hacc
+- slide: ls ss siu sid sou sod
+- bend: preset ("half" "full" "1h" "full-r" "pb" ...) OR curve [[pos0-100,val(100=1 tone)],...]
+- harm: "n" natural, {"a":fret} artificial, "p" pinch, "t" tap
+
+HARD CONSTRAINTS (must hold for every note you add)
+1. Stay in the same key / scale / mode as the existing bars. Infer it from the notes
+   (resolve fret+string against the track tuning to get pitches) and state it back.
+2. Match the established feel, rhythmic vocabulary, register and genre.
+3. Physically playable on a 6-string guitar:
+   - 0 <= fret <= 24, never negative.
+   - Fretted notes sounding together stay within a 4-fret hand span.
+   - Avoid position jumps greater than 5 frets between consecutive beats.
+   - One note per string per beat.
+4. Continue the measure numbering; keep the same track/tuning.
+
+OUTPUT
+First, one short line: the detected key/scale/mode and the genre you inferred.
+Then ONLY the 2 new measure object(s) as a JSON array, in TGX measure shape,
+ready to append to tracks[0].measures. No prose around the JSON.
+
+SONG (TGX)
+{
+  "v": 1,
+  "tempo": 120,
+  "tracks": [
+    {
+      "name": "Track 1",
+      "program": 25,
+      "channel": 2,
+      "tuning": [64,59,55,50,45,40],
+      "measures": [
+        {
+          "ts": [4,4],
+          "tempo": 120,
+          "beats": [
+            {"d":"s","notes":[{"s":1,"f":15}]},
+            {"d":"s","notes":[{"s":1,"f":15}]},
+            {"d":"s","notes":[{"s":1,"f":15}]},
+            {"d":"s","notes":[{"s":1,"f":15}]},
+            {"d":"e","notes":[{"s":1,"f":13}]},
+            {"d":"e","notes":[{"s":1,"f":13}]},
+            {"d":"e","notes":[{"s":2,"f":15}]},
+            {"d":"e","notes":[{"s":2,"f":15}]},
+            {"d":"q","notes":[{"s":1,"f":13}]}
+          ]
+        },
+        {"beats":[{"d":"w","rest":true}]}
+      ]
+    }
+  ]
+}
