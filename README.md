@@ -1,105 +1,90 @@
-# TuxGuitar (macOS)
+# Tabbycat
 
-## Description
+A macOS guitar-tablature editor and player — an **Electron + Nuxt 4 (Vue 3) rewrite of [TuxGuitar](https://github.com/helge17/tuxguitar)**.
 
-TuxGuitar is an open source multitrack guitar tablature editor and player written in Java.
+- **UI** — Nuxt 4 / Vue 3 single-page app running in Electron.
+- **Notation** — tab/score rendering built on [alphaTab](https://alphatab.net) (MPL-2.0).
+- **Audio** — a standalone **Rust sidecar** (`cpal` + `oxisynth`) synthesizes a SoundFont and streams playback-position events back for cursor sync.
+- **Platform** — macOS only. (Electron makes Windows/Linux cheap later, but they are not a goal right now.)
 
-**This fork builds the macOS (SWT/Cocoa) version only.** All other platform targets
-(Linux, Windows, FreeBSD, Android) have been removed.
+The original Java/SWT TuxGuitar is preserved under [`tuxguitar-java/`](tuxguitar-java/) as the reference implementation the rewrite ports from. The overall plan lives in [`MIGRATION.MD`](MIGRATION.MD).
 
-## Download
+## Status
 
-This fork does not publish prebuilt packages — see [Build from source](#build-from-source-macos) below.
+Early and incomplete — version `0.0.1`. Today the app:
 
-Ready-to-use installation packages for the original multi-platform project (Linux, Windows,
-macOS, FreeBSD, Android) are available on the upstream
-[releases](https://github.com/helge17/tuxguitar/releases/) page.
+- opens the native **`.tg`** format (parsed in TypeScript) and renders the score/tab,
+- plays it back through the Rust sidecar with a synced cursor and progress bar.
 
-## Build from source (macOS)
+Not yet implemented: editing, saving, and importing the other formats (GP3/4/5, GPX, PTB, TEF, MusicXML, MIDI) — these appear in the Open dialog but don't parse yet. See [`MIGRATION.MD`](MIGRATION.MD) for the phase plan.
 
-### Prerequisites
+## Requirements
 
-- JDK 17 or higher (CI uses 21)
-- Maven 3.3 or higher
-- Eclipse SWT 4.37 (cocoa/macosx)
+- macOS
+- [Node.js](https://nodejs.org) ≥ 18 and [pnpm](https://pnpm.io)
+- For audio only: [Rust](https://rustup.rs) (`cargo`)
 
-On macOS you need [Homebrew](https://brew.sh) to install the build tools:
-
-```sh
-$ brew install openjdk maven wget
-```
-
-### Install SWT for macOS
-
-Eclipse SWT is not on Maven Central, so install it into your local Maven repo first:
+## Getting started
 
 ```sh
-$ TUX_ARCH=`uname -m | sed 's/arm64/aarch64/'`
-$ wget https://download.eclipse.org/eclipse/downloads/drops4/R-4.37-202509050730/swt-4.37-cocoa-macosx-${TUX_ARCH}.zip
-$ mkdir swt-4.37-cocoa-macosx-${TUX_ARCH}
-$ cd swt-4.37-cocoa-macosx-${TUX_ARCH}
-$ unzip ../swt-4.37-cocoa-macosx-${TUX_ARCH}.zip
-$ mvn install:install-file -Dfile=swt.jar -DgroupId=org.eclipse.swt -DartifactId=org.eclipse.swt.cocoa.macosx -Dpackaging=jar -Dversion=4.37
-$ cd ..
+pnpm install
+pnpm dev          # launches Electron + the Nuxt dev server with HMR
 ```
 
-### Build and start TuxGuitar
-
-The buildable assembly module is `desktop/build-scripts/tuxguitar-macosx-swt-cocoa`, which
-aggregates every other module into a macOS `.app` bundle:
+The app runs without audio out of the box. To enable playback, build the sidecar once:
 
 ```sh
-$ cd desktop/build-scripts/tuxguitar-macosx-swt-cocoa
-$ mvn -e clean verify                 # matches CI (.github/workflows/macos-maven.yml)
-$ cd -
+pnpm sidecar:build   # downloads the GeneralUser GS SoundFont (~32 MB) and compiles the Rust binary
 ```
 
-The application is now located at
-`desktop/build-scripts/tuxguitar-macosx-swt-cocoa/target/tuxguitar-9.99-SNAPSHOT-macosx-swt-cocoa.app`.
-Start TuxGuitar by double-clicking it.
+This produces `sidecar/bin/tuxguitar-sidecar` and `sidecar/bin/GeneralUser.sf2` (both git-ignored). Restart the app; the status bar should read `sidecar: ready`.
 
-To additionally compile the native AudioUnit MIDI bridge
-(`desktop/TuxGuitar-AudioUnit`), add the `native-modules` profile. This requires the
-Xcode command line tools (`make`):
+## Building a release
 
 ```sh
-$ mvn -e clean verify -P native-modules
+pnpm generate     # static SPA build → .output/public  (also: `pnpm build`)
+pnpm preview      # run Electron against that build
+pnpm dist         # package a signed-ready macOS .dmg via electron-builder → release/
 ```
 
-### Troubleshooting
+> The renderer is served in production from a custom `app://` protocol, which requires a **static** build — that's why `build` maps to `nuxt generate`, not `nuxt build`.
 
-There may be some cases where the build fails. A few examples (not an exhaustive list):
-
-- TuxGuitar sources have been placed in a folder whose absolute path contains non-ASCII characters
-- During development of a feature some unit tests are broken
-- other configuration-specific issues
-
-In these cases it is possible to build TuxGuitar without running the unit tests by adding
-the `-DskipTests` flag to the build command:
+## Tests
 
 ```sh
-$ mvn -e clean verify -DskipTests
+pnpm test         # Vitest (test/**/*.test.ts)
 ```
 
-Note that disabling unit tests is **not recommended**.
+Golden tests parse the bundled `china.tg` sample. More fixtures will be captured from the legacy Java build as codecs are ported (see [`MIGRATION.MD` §8](MIGRATION.MD)).
 
-## Contribute
+## Project layout
 
-Issues and pull requests are welcome on the
-[project's GitHub repository](https://github.com/helge17/tuxguitar).
+| Path | What |
+|---|---|
+| `app/` | Nuxt renderer — Vue components, composables, app shell |
+| `electron/` | Main process, typed preload bridge, sidecar supervisor |
+| `shared/` | Song model + `.tg` reader + MIDI/alphaTab exporters + IPC types (shared across processes) |
+| `sidecar/` | Rust audio sidecar (cpal + oxisynth) |
+| `packages/alphatab/` | Vendored alphaTab source |
+| `scripts/` | Icon generation, dev gate, AI/`.tgx` tooling |
+| `docs/` | `tgx-format.md`, `ai-features.md` |
+| `tuxguitar-java/` | Legacy Java/SWT TuxGuitar — reference implementation |
 
-## License
+For an architecture overview and contributor notes, see [`CLAUDE.md`](CLAUDE.md).
 
-TuxGuitar is released under the GNU Lesser General Public License.
+## AI & the TGX format (planned)
 
-Copyright (C) 2005-2022 Julián Casadesús
-              2023-2025 guiv42, helge17
+A text-based native format, **TGX** (`.tgx`, JSON) — lossless, git-diffable, and token-efficient — is being introduced so that AI-assisted editing can operate on a slice of measures as both the editable model and the prompt context. See [`docs/tgx-format.md`](docs/tgx-format.md) and [`docs/ai-features.md`](docs/ai-features.md).
 
-## Third party products
+## Acknowledgements & licensing
 
-TuxGuitar includes the following third party products:
+Tabbycat is a derivative of **TuxGuitar**, © 2005–2022 Julián Casadesús and 2023–2025 contributors, released under the **GNU LGPL**. The legacy Java sources under `tuxguitar-java/` retain that license.
 
-* SWT (Standard Widget Toolkit): https://www.eclipse.org/swt/
-* Gervill (Java Software Synthesizer)
-* iText (Free Java-PDF library): https://itextpdf.com/
-* Magic Sound Font v2.0 - Contributed by Dennis Deutschmann
+Third-party components:
+
+- **alphaTab** — notation rendering — MPL-2.0
+- **GeneralUser GS** — SoundFont (downloaded at build time, not redistributed here) — see its own license
+- **oxisynth**, **cpal** — Rust audio — MIT/Apache-2.0
+- **Electron**, **Nuxt**, **Vue**, **Tailwind CSS**
+
+> A top-level `LICENSE` for the rewritten (non-legacy) code has not been added yet — TODO. Given the LGPL legacy base, the project license must be chosen with that in mind.
