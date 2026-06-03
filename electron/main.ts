@@ -170,6 +170,42 @@ class PlaybackClock {
 const sidecar = new SidecarManager();
 const clock = new PlaybackClock();
 let lastSong: TGSong | null = null;
+// Guards against stacking native open dialogs: while one is open, concurrent
+// requests (menu + button + repeated triggers) coalesce onto the in-flight one.
+let openDialogPromise: Promise<TGSong | null> | null = null;
+
+async function runOpenFileDialog(): Promise<TGSong | null> {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    filters: [
+      { name: "TuxGuitar Files", extensions: ["tg"] },
+      {
+        name: "All Supported",
+        extensions: ["tg", "gp3", "gp4", "gp5", "gp", "gpx", "ptb", "tef", "mxml", "xml", "mid", "midi"],
+      },
+    ],
+    properties: ["openFile"],
+  });
+  if (canceled || filePaths.length === 0) return null;
+  const filePath = filePaths[0];
+
+  if (filePath.endsWith(".tg")) {
+    try {
+      const bytes = readFileSync(filePath);
+      const song = parseTgFile(new Uint8Array(bytes));
+      validateFirstBeatPreciseStart(song);
+      lastSong = song;
+      if (sidecar.status === "ready") {
+        const events = exportMidi(song);
+        sidecar.load(events, TPQ).catch(e => console.error("[main] sidecar load failed:", e));
+      }
+      return song;
+    } catch (err) {
+      console.error(`[main] failed to parse .tg: ${String(err)}`);
+      return null;
+    }
+  }
+  return null;
+}
 
 function measureAtPrecise(preciseTick: number, song: TGSong | null): number {
   if (!song) return 1;
@@ -407,37 +443,13 @@ void app.whenReady().then(() => {
   ipcMain.handle(IpcChannels.appGetVersion, () => app.getVersion());
   ipcMain.handle(IpcChannels.appPing, () => "pong" as const);
 
-  ipcMain.handle(IpcChannels.fileOpenDialog, async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-      filters: [
-        { name: "TuxGuitar Files", extensions: ["tg"] },
-        {
-          name: "All Supported",
-          extensions: ["tg", "gp3", "gp4", "gp5", "gp", "gpx", "ptb", "tef", "mxml", "xml", "mid", "midi"],
-        },
-      ],
-      properties: ["openFile"],
+  ipcMain.handle(IpcChannels.fileOpenDialog, () => {
+    // Only one open dialog at a time — return the in-flight promise if present.
+    if (openDialogPromise) return openDialogPromise;
+    openDialogPromise = runOpenFileDialog().finally(() => {
+      openDialogPromise = null;
     });
-    if (canceled || filePaths.length === 0) return null;
-    const filePath = filePaths[0];
-
-    if (filePath.endsWith(".tg")) {
-      try {
-        const bytes = readFileSync(filePath);
-        const song = parseTgFile(new Uint8Array(bytes));
-        validateFirstBeatPreciseStart(song);
-        lastSong = song;
-        if (sidecar.status === "ready") {
-          const events = exportMidi(song);
-          sidecar.load(events, TPQ).catch(e => console.error("[main] sidecar load failed:", e));
-        }
-        return song;
-      } catch (err) {
-        console.error(`[main] failed to parse .tg: ${String(err)}`);
-        return null;
-      }
-    }
-    return null;
+    return openDialogPromise;
   });
 
   ipcMain.handle(IpcChannels.sidecarStatus, () => sidecar.status);

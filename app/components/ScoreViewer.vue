@@ -1,6 +1,9 @@
 <template>
   <ScrollArea root-class="size-full">
-    <div class="w-[21cm] min-h-[29.7cm] flex mx-auto my-4 bg-white rounded-xl shadow-lg p-8">
+    <div class="max-w-4xl min-h-256 flex flex-col mx-auto my-4 bg-white rounded-xl shadow-lg p-8">
+      <div class="text-4xl mb-8">
+        {{ song?.name || "No song loaded" }}
+      </div>
       <div class="flex-1 relative overflow-hidden" ref="container" />
     </div>
   </ScrollArea>
@@ -36,8 +39,11 @@ onMounted(async () => {
     },
     display: {
       layoutMode: alphaTab.LayoutMode.Page,
-      scale: 0.9,
+      scale: 1,
       padding: [16, 16],
+      resources: {
+        staffLineColor: "rgba(0,0,0,0.25)", // the string/staff lines
+      },
     },
     player: {
       enablePlayer: false,

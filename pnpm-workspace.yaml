@@ -1,3 +1,4 @@
 packages:
   - '.'
   - 'packages/alphatab/packages/alphatab'
+  - 'packages/alphatab/packages/tooling'

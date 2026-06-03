@@ -16,7 +16,8 @@
     "ai:tgx": "node scripts/ai/run.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "nuxt prepare"
+    "build:packages": "pnpm --filter @coderline/alphatab build",
+    "postinstall": "pnpm run build:packages && nuxt prepare"
   },
   "engines": {
     "node": ">=18"
@@ -33,7 +34,7 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@coderline/alphatab": "^1.8.3",
+    "@coderline/alphatab": "workspace:*",
     "@coderline/alphatab-vite": "^1.8.3",
     "@phosphor-icons/vue": "^2.2.1",
     "fast-xml-parser": "^5.8.0",

@@ -74,6 +74,18 @@ export function tgSongToScore(song: TGSong): alphaTab.model.Score {
     const sortedStrings = [...tgTrack.strings].sort((a, b) => a.number - b.number);
     staff.stringTuning.tunings = sortedStrings.map((s) => s.value);
 
+    // Custom tuning label, e.g. "6-string guitar, E A D G B E".
+    // tunings[] is high→low (string 1 = high e); reverse to low→high for display.
+    // A non-empty name is preserved by Tuning.finish(); leaving it empty would
+    // let alphaTab fill in its preset name ("Guitar Standard Tuning").
+    const tuningNotes = [...staff.stringTuning.tunings]
+      .reverse()
+      .map((v) => alphaTab.model.Tuning.getTextForTuning(v, false))
+      .join(" ");
+    if (staff.stringTuning.tunings.length > 0) {
+      staff.stringTuning.name = `${staff.stringTuning.tunings.length}-string guitar, ${tuningNotes}`;
+    }
+
     addBarsForTrack(staff, tgTrack, song.measureHeaders.length);
   }
 

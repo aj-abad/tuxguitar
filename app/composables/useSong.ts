@@ -8,6 +8,7 @@ export function useSong() {
 
   async function openFile() {
     if (typeof window === "undefined" || !window.tg) return;
+    if (loading.value) return; // dialog already open — don't stack another
     loading.value = true;
     error.value = null;
     try {
