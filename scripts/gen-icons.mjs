@@ -1,21 +1,22 @@
 #!/usr/bin/env node
-// Generate the macOS app icon (.icns + 1024² .png) from public/icon.svg.
+// Generate the dev-only Dock raster (electron/resources/icon.png) from the Icon
+// Composer source (electron/resources/icon.icon), so the unpackaged `pnpm dev`
+// Dock tile matches the shipped Liquid-Glass app icon.
 //
-// Frames the raw logo in Apple's Big Sur icon grid — an 824² rounded "squircle"
-// body centered in a 1024² canvas (~100px transparent margin) — so the dock /
-// Finder icon matches other macOS apps instead of being a full-bleed square.
+// Packaging does NOT use this file: electron-builder (≥26.8) compiles icon.icon
+// itself via actool into the bundle's .icns + Liquid-Glass Assets.car — see
+// electron-builder.yml. This script exists only to feed main.ts's
+// `app.dock.setIcon(icon.png)`, which runs for dev runs (guarded `!app.isPackaged`).
 //
-// Two renderers, by capability:
-//   • qlmanage (system WebKit) rasterizes the SVG. It handles gradients, CSS
-//     `<style>` fills, filters, etc. — ImageMagick's built-in SVG renderer does
-//     not (a gradient referenced from a CSS class renders solid black).
-//   • ImageMagick only composites pixels (rounded-corner alpha mask, padding,
-//     downscaling) — it never parses the SVG, so logo complexity can't break it.
-//     qlmanage flattens alpha to white, so the corners must be cut here, after.
+// Pipeline (macOS + Xcode 26 `actool`):
+//   actool icon.icon → icon.icns   Apple's own render — gradient + glass baked in
+//   iconutil -c iconset            extract the 256² representation
+//   ImageMagick upscale 256 → 1024 Lanczos; soft at full size, but the Dock only
+//                                  ever renders it small, and 1024 keeps drop-in
+//                                  parity with the previous icon.png dimensions.
 //
-// macOS-only (qlmanage/iconutil). Skips gracefully without ImageMagick or off
-// macOS, and no-ops when outputs are newer than the source — so the committed
-// icons keep working without the toolchain.
+// Degrades gracefully: off macOS, or without actool (Xcode) / ImageMagick, it
+// keeps the committed icon.png so dev still has a Dock tile.
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync,
@@ -25,15 +26,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "public", "icon.svg");
-const OUT_DIR = join(ROOT, "electron", "resources");
-const ICNS = join(OUT_DIR, "icon.icns");
-const PNG = join(OUT_DIR, "icon.png");
-
-// Apple Big Sur icon grid (in a 1024² canvas).
-const CANVAS = 1024;
-const BODY = 824;                   // squircle body size
-const RADIUS = 184;                 // ≈22.4% of body — matches the macOS corner
+const SRC = join(ROOT, "electron", "resources", "icon.icon");
+const PNG = join(ROOT, "electron", "resources", "icon.png");
 
 const run = (cmd, args) => execFileSync(cmd, args, { stdio: "ignore" });
 const tool = (cands) => {
@@ -44,7 +38,7 @@ const tool = (cands) => {
 };
 
 if (process.platform !== "darwin") {
-  console.warn("[icons] non-macOS host; skipping (needs qlmanage/iconutil).");
+  console.warn("[icons] non-macOS host; skipping (needs actool/iconutil).");
   process.exit(0);
 }
 if (!existsSync(SRC)) {
@@ -52,66 +46,72 @@ if (!existsSync(SRC)) {
   process.exit(0);
 }
 
-// No-op if both outputs are at least as new as the source.
-const srcMtime = statSync(SRC).mtimeMs;
-const fresh = (p) => existsSync(p) && statSync(p).mtimeMs >= srcMtime;
-if (fresh(ICNS) && fresh(PNG)) {
+// Newest mtime anywhere inside the .icon bundle (icon.json + Assets/*).
+const newestMtime = (path) => {
+  const st = statSync(path);
+  if (!st.isDirectory()) return st.mtimeMs;
+  let m = st.mtimeMs;
+  for (const e of readdirSync(path)) m = Math.max(m, newestMtime(join(path, e)));
+  return m;
+};
+
+// No-op if icon.png is at least as new as every file in the source bundle.
+const srcMtime = newestMtime(SRC);
+if (existsSync(PNG) && statSync(PNG).mtimeMs >= srcMtime) {
   console.log("[icons] up to date.");
   process.exit(0);
 }
 
-const im = tool(["magick", "convert"]);
-if (!im) {
-  console.warn("[icons] ImageMagick not found; keeping existing icons. Install: brew install imagemagick");
+// actool ships with Xcode (`--version` exits 0 and prints a version plist).
+let hasActool = false;
+try { execFileSync("actool", ["--version"], { stdio: "ignore" }); hasActool = true; } catch { /* absent */ }
+if (!hasActool) {
+  console.warn("[icons] actool not found (needs Xcode 26+); keeping existing icon.png.");
   process.exit(0);
 }
 
-console.log("[icons] regenerating from public/icon.svg …");
+console.log("[icons] regenerating icon.png from electron/resources/icon.icon …");
 
-const work = join(tmpdir(), "tabbycat-icons");
+const work = join(tmpdir(), "tabbycat-icon-png");
 rmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 
-// 1. Rasterize the SVG faithfully (WebKit). qlmanage names output "<file>.png".
-run("qlmanage", ["-t", "-s", String(BODY), "-o", work, SRC]);
-const rendered = readdirSync(work).find((f) => f.endsWith(".png"));
-if (!rendered) {
-  console.error("[icons] qlmanage produced no output; aborting.");
+// 1. Compile the Icon Composer file to an .icns (mirrors electron-builder's
+//    actool invocation). actool names the output after `--app-icon`.
+const outDir = join(work, "out");
+mkdirSync(outDir, { recursive: true });
+run("actool", [
+  SRC,
+  "--compile", outDir,
+  "--output-format", "human-readable-text",
+  "--app-icon", "icon",
+  "--include-all-app-icons",
+  "--minimum-deployment-target", "26.0",
+  "--platform", "macosx",
+  "--target-device", "mac",
+  "--output-partial-info-plist", join(outDir, "partial.plist"),
+]);
+const icns = join(outDir, "icon.icns");
+if (!existsSync(icns)) {
+  console.error("[icons] actool produced no icns; keeping existing icon.png.");
   process.exit(1);
 }
 
-// 2. Normalize to an exact square body, then cut rounded corners with a drawn
-//    mask, then pad onto a transparent canvas. ImageMagick only moves pixels.
-const master = join(work, "master.png");
-run(im, [
-  join(work, rendered),
-  "-resize", `${BODY}x${BODY}`, "-background", "none", "-gravity", "center", "-extent", `${BODY}x${BODY}`,
-  "(", "-size", `${BODY}x${BODY}`, "xc:none", "-fill", "white",
-  "-draw", `roundrectangle 0,0 ${BODY - 1},${BODY - 1} ${RADIUS},${RADIUS}`, ")",
-  "-alpha", "off", "-compose", "CopyOpacity", "-composite",
-  "-compose", "over", "-background", "none", "-gravity", "center", "-extent", `${CANVAS}x${CANVAS}`,
-  master,
-]);
-
-// 3. Assemble the .iconset by downscaling the master (alpha preserved).
-const iconset = join(work, "Tabbycat.iconset");
-mkdirSync(iconset, { recursive: true });
-const slots = [
-  [16, "icon_16x16.png"], [32, "icon_16x16@2x.png"],
-  [32, "icon_32x32.png"], [64, "icon_32x32@2x.png"],
-  [128, "icon_128x128.png"], [256, "icon_128x128@2x.png"],
-  [256, "icon_256x256.png"], [512, "icon_256x256@2x.png"],
-  [512, "icon_512x512.png"], [1024, "icon_512x512@2x.png"],
-];
-for (const [size, name] of slots) {
-  const dst = join(iconset, name);
-  if (size === CANVAS) copyFileSync(master, dst);
-  else run(im, [master, "-filter", "Lanczos", "-resize", `${size}x${size}`, dst]);
+// 2. Extract the 256² representation (the largest the new-format icns carries).
+const iconset = join(work, "icon.iconset");
+run("iconutil", ["-c", "iconset", icns, "-o", iconset]);
+const rep = join(iconset, "icon_128x128@2x.png"); // 256×256
+if (!existsSync(rep)) {
+  console.error("[icons] expected 256² rep missing; keeping existing icon.png.");
+  process.exit(1);
 }
 
-mkdirSync(OUT_DIR, { recursive: true });
-run("iconutil", ["-c", "icns", iconset, "-o", ICNS]);
-copyFileSync(master, PNG);
+// 3. Upscale 256 → 1024 (Lanczos). Without ImageMagick, ship the 256² as-is.
+const im = tool(["magick", "convert"]);
+if (im) run(im, [rep, "-filter", "Lanczos", "-resize", "1024x1024", PNG]);
+else {
+  console.warn("[icons] ImageMagick not found; writing 256² icon.png (install: brew install imagemagick).");
+  copyFileSync(rep, PNG);
+}
 
-console.log(`[icons] wrote ${ICNS}`);
 console.log(`[icons] wrote ${PNG}`);

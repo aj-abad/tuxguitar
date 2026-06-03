@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "icons": "node scripts/gen-icons.mjs",
-    "dev": "node scripts/dev-guard.mjs && pnpm run icons && TMPDIR=/tmp nuxt dev",
+    "dev": "node scripts/dev-guard.mjs && node scripts/sidecar-guard.mjs && pnpm run icons && TMPDIR=/tmp nuxt dev",
     "generate": "pnpm run icons && nuxt generate",
     "build": "pnpm run generate",
     "preview": "pnpm run generate && electron .",

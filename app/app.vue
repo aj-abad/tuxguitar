@@ -1,11 +1,11 @@
 <template>
-  <div class="h-screen flex flex-col text-white select-none">
+  <div class="h-screen flex flex-col select-none">
     <GlobalTitleBar />
     <TopBar />
     <!-- Song metadata strip -->
     <div
       v-if="song"
-      class="bg-black/40 px-4 py-1.5 text-xs border-b border-white/10 shrink-0 flex gap-4 flex-wrap opacity-70">
+      class="bg-black/40 text-white px-4 py-1.5 text-xs border-b border-white/10 shrink-0 flex gap-4 flex-wrap opacity-70">
       <span v-if="song.name">{{ song.name }}</span>
       <span v-if="song.artist">by {{ song.artist }}</span>
       <span v-if="song.album">• {{ song.album }}</span>
@@ -14,12 +14,13 @@
       <span>{{ song.measureHeaders[0]?.tempo ?? 120 }} BPM</span>
     </div>
 
-   
-
     <!-- Main content -->
-    <main class="flex-1 overflow-hidden flex flex-col">
-      <EmptyState v-if="!song" />
-      <ScoreViewer v-else />
+    <main class="flex-1 relative overflow-hidden">
+      <div class="absolute h-full size-full top-0 right-0 overflow-auto">
+        <EmptyState v-if="!song" />
+        <ScoreViewer v-else />
+      </div>
+      <Sidebar v-if="song" />
     </main>
 
     <!-- Status bar -->

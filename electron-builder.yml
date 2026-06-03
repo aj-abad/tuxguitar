@@ -12,4 +12,6 @@ mac:
     - dmg
   category: public.app-category.music
   hardenedRuntime: true
-  icon: electron/resources/icon.icns
+  # Icon Composer source. electron-builder 26.8+ runs actool (Xcode 26) to emit
+  # the icns + Liquid-Glass Assets.car and sets CFBundleIconName. macOS 26 glass.
+  icon: electron/resources/icon.icon

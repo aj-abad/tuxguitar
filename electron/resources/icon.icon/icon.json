@@ -1,0 +1,55 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.89199,1.00000,0.56035,1.00000",
+      "display-p3:0.77721,0.96783,0.30877,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.7
+      }
+    }
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "display-p3:0.00000,0.00000,0.00000,1.00000"
+          },
+          "glass" : true,
+          "image-name" : "tabbycat 2.svg",
+          "name" : "tabbycat 2",
+          "opacity" : 0.93,
+          "position" : {
+            "scale" : 1.9,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

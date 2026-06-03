@@ -1,5 +1,9 @@
 <template>
-  <div class="flex-1 relative overflow-hidden bg-white" ref="container" />
+  <div class="size-full flex justify-center">
+    <div class="w-[21cm] min-h-[29.7cm] flex m-4 bg-white rounded-xl shadow-lg p-8">
+      <div class="flex-1 relative overflow-hidden" ref="container" />
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -14,11 +18,14 @@ let api: alphaTab.AlphaTabApi | null = null;
 
 onMounted(async () => {
   if (!container.value) return;
-  console.log("[ScoreViewer] mounting, container size:", container.value.offsetWidth, "x", container.value.offsetHeight);
+  console.log(
+    "[ScoreViewer] mounting, container size:",
+    container.value.offsetWidth,
+    "x",
+    container.value.offsetHeight,
+  );
 
   await Promise.allSettled([
-    new FontFace("Georgia", "local(Georgia)").load().then((f) => document.fonts.add(f)),
-    new FontFace("Arial", "local(Arial)").load().then((f) => document.fonts.add(f)),
     new FontFace("alphaTab", "url(/font/Leipzig.otf)").load().then((f) => document.fonts.add(f)),
   ]);
 
