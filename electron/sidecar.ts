@@ -33,11 +33,13 @@ export class SidecarManager extends EventEmitter {
   }
 
   private static binaryCandidates(): string[] {
-    const binary = process.platform === "win32" ? "tuxguitar-sidecar.exe" : "tuxguitar-sidecar";
+    const binary = process.platform === "win32" ? "tabbycat-audio.exe" : "tabbycat-audio";
+    const platform = process.platform === "win32" ? "win" : process.platform === "darwin" ? "mac" : "linux";
+    const folder = `${platform}-${process.arch}`;
     return [
       join(process.resourcesPath, "sidecar", binary),
-      join(__dirname, "../sidecar/bin", binary),
-      join(__dirname, "../../sidecar/bin", binary),
+      join(__dirname, "../sidecar/bin", folder, binary),
+      join(__dirname, "../../sidecar/bin", folder, binary),
     ];
   }
 

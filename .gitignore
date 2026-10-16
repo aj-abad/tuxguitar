@@ -48,8 +48,8 @@ release/
 # single-instance dev lock (scripts/dev.mjs)
 .dev.lock
 
-# Rust sidecar build artifacts
-sidecar/bin/tuxguitar-sidecar
-sidecar/bin/tuxguitar-sidecar.exe
-sidecar/bin/*.sf2
-sidecar/bin/*.jar
+# .NET audio builds and local SoundFont
+sidecar/bin/
+sidecar/obj/
+sidecar/tests/bin/
+sidecar/tests/obj/

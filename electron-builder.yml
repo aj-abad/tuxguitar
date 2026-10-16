@@ -7,6 +7,15 @@ files:
   - dist-electron/**
   - .output/public/**
   - package.json
+beforePack: scripts/prepare-sidecar.mjs
+extraResources:
+  - from: sidecar/bin/${os}-${arch}
+    to: sidecar
+    filter:
+      - '**/*'
+      - '!*.pdb'
+  - from: sidecar/bin/GeneralUser.sf2
+    to: sidecar/GeneralUser.sf2
 mac:
   target:
     - dmg

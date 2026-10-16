@@ -4,8 +4,8 @@ A guitar-tablature editor and player — an **Electron + Nuxt 4 (Vue 3) rewrite 
 
 - **UI** — Nuxt 4 / Vue 3 single-page app running in Electron.
 - **Notation** — custom TypeScript layout and SVG rendering for tablature, with [alphaTab](https://alphatab.net) (MPL-2.0) available as a comparison view.
-- **Audio** — a standalone **Rust sidecar** (`cpal` + `oxisynth`) synthesizes a SoundFont and streams playback-position events back for cursor sync.
-- **Platform** — macOS release configuration; Windows development, desktop editing and native audio startup/playback are tested. Windows packaging remains open.
+- **Audio** — a self-contained **.NET 10 / C# sidecar** (MeltySynth + SDL2) synthesizes a SoundFont and streams device-queue playback positions back for cursor sync. Playback and writing are the scope; recording is not planned.
+- **Platform** — macOS release configuration; Windows development, desktop editing, native audio, and an unsigned unpacked Windows build are tested. Signed installers and native macOS audio qualification remain open.
 
 The original Java/SWT TuxGuitar is preserved under [`tuxguitar-java/`](tuxguitar-java/) as the reference implementation the rewrite ports from. The overall plan lives in [`MIGRATION.MD`](MIGRATION.MD).
 
@@ -18,7 +18,7 @@ Early and incomplete — version `0.0.1`. Today the app:
 - selects individual string cells or ranges, and moves/duplicates rhythmic columns within a measure,
 - offers wrapped/continuous tab, zoom and spacing controls, and an audio-driven playhead,
 - saves and reopens edited `.tg` v2 files while preserving the original XML and additional archive entries,
-- plays the edited song through the Rust sidecar when it is installed, with a progress bar.
+- plays the edited song through the .NET sidecar when it is installed, with a progress bar.
 
 Edit **inside existing measures**: click a note or rest, select a string, and type a fret number. Entering a fret on an empty string adds a note; using another string adds to the chord. Two digits entered within one second form one undo step. Tied-note fret changes apply to the whole tie. The inspector also exposes string, fret, duration and dots.
 
@@ -52,7 +52,7 @@ The custom renderer is a **tab-only spike**: one track/voice at a time, fret num
 
 - macOS or Windows for development
 - [Node.js](https://nodejs.org) ≥ 22.12 (24 LTS recommended) and [pnpm](https://pnpm.io)
-- For audio only: [Rust](https://rustup.rs) (`cargo`)
+- To build audio: [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). Published builds include their runtime.
 
 ## Getting started
 
@@ -64,10 +64,12 @@ pnpm dev          # launches Electron + the Nuxt dev server with HMR
 The app runs without audio out of the box. To enable playback, build the sidecar once:
 
 ```sh
-pnpm sidecar:build   # downloads the GeneralUser GS SoundFont (~32 MB) and compiles the Rust binary
+pnpm sidecar:build   # downloads GeneralUser GS (~32 MB) and publishes self-contained .NET audio
 ```
 
-This produces `sidecar/bin/tuxguitar-sidecar` (`.exe` on Windows) and `sidecar/bin/GeneralUser.sf2` (both git-ignored). Restart the app; the status bar should read `Audio ready`. Without the sidecar the editor still works; Play reports that audio is unavailable.
+This produces `sidecar/bin/win-x64/tabbycat-audio.exe` on Windows x64 (or `mac-arm64/tabbycat-audio`, `mac-x64/tabbycat-audio`, etc.) with its runtime and SDL library, plus `sidecar/bin/GeneralUser.sf2`. These outputs are git-ignored. Keep the complete published directory together. Restart the app; the status bar should read `Audio ready`. Without the sidecar the editor still works; Play reports that audio is unavailable.
+
+`node scripts/build-sidecar.mjs --runtime osx-arm64` can publish a different supported target. Electron packaging automatically builds audio for its target architecture and includes the runtime, native SDL library, and SoundFont. Cross-publishing does not validate audio on that operating system. Native AOT is not used.
 
 The launch and audio build scripts are portable Node scripts. On macOS the dev launcher still shortens `TMPDIR` for Nuxt's socket path. It refuses to start if port 4399 is already in use, without terminating another session.
 
@@ -87,9 +89,14 @@ pnpm dist         # package a signed-ready macOS .dmg via electron-builder → r
 pnpm test         # Vitest (test/**/*.test.ts)
 pnpm typecheck    # Vue, shared model and Electron TypeScript
 pnpm test:e2e     # build, then run hidden Electron editing, rhythm and tab-engine tests
+pnpm test:audio   # after sidecar:build: synth/timing checks and published-process protocol tests
 ```
 
 Tests cover the bundled `china.tg`, note/chord/rest entry, rhythm integrity, history, ties, renderer mapping, archive preservation (including unknown XML, Unicode and different line endings), failed saves, external changes, and edited MIDI scheduling. Electron tests use temporary copies under `.cache/` and save screenshots there. They exercise real rendering, file drops, note/rest interaction, native commands, structural save/reopen, and cancellation/error recovery. When the sidecar binary exists, they also verify that the native audio clock reaches the edited measure and stops, using a silent fixture. Audible fidelity and opening saved files in the legacy Java app remain separate qualification steps.
+
+Audio checks exercise tempo changes at multiple sample rates, actual SoundFont PCM, seek/controller state, load resets, malformed requests, stop/end events, startup failures, and EOF shutdown. The process tests use SDL's dummy driver by default; `TG_AUDIO_TEST_NATIVE=1` selects the real device with silent MIDI. The Electron rhythm test uses the real device. Progress measures frames consumed from SDL's queue; the final hardware buffer adds unmeasured latency. macOS/Linux device playback and listening comparisons against the old synth still need native qualification.
+
+For an unsigned Windows package, run `pnpm exec electron-builder --win --dir --config.win.signAndEditExecutable=false` after `pnpm generate`. Setting `TG_TEST_PACKAGED_APP` to `release/win-unpacked/Tabbycat.exe` when running `node test/e2e/rhythm.mjs` exercises the packaged app's editing, saves and real-device playback. Optional screenshots are captured in the development run because the hidden packaged window can suspend capture.
 
 The tab-engine suite also covers zoomed pointer input, rectangular selection, Alt shortcuts, stable identities, source-preserving column copies, wrapped/continuous layouts and a 500-measure fixture. Only nearby systems mount in the wrapped SVG. Local input-to-DOM timing observations are written to `performance.json`; they exclude display/paint latency because hidden Electron windows throttle animation frames. They are observations rather than hardware-independent performance guarantees.
 
@@ -100,7 +107,7 @@ The tab-engine suite also covers zoomed pointer input, rectangular selection, Al
 | `app/` | Nuxt renderer — Vue components, composables, app shell |
 | `electron/` | Main process, typed preload bridge, sidecar supervisor |
 | `shared/` | Song model, edit commands/history/identities, tab geometry, `.tg` IO, MIDI/alphaTab adapters, IPC types |
-| `sidecar/` | Rust audio sidecar (cpal + oxisynth) |
+| `sidecar/` | .NET audio sidecar, frame scheduling, MeltySynth, SDL output, and audio checks |
 | `packages/alphatab/` | Vendored alphaTab source |
 | `scripts/` | Icon generation, dev gate, AI/`.tgx` tooling |
 | `docs/` | `tgx-format.md`, `ai-features.md` |
@@ -120,7 +127,8 @@ Third-party components:
 
 - **alphaTab** — notation rendering — MPL-2.0
 - **GeneralUser GS** — SoundFont (downloaded at build time, not redistributed here) — see its own license
-- **oxisynth**, **cpal** — Rust audio — MIT/Apache-2.0
+- **MeltySynth** — C# SoundFont synthesis — MIT
+- **SDL2** (native binaries from Ultz.Native.SDL) — audio output — zlib
 - **Electron**, **Nuxt**, **Vue**, **Tailwind CSS**
 
 > A top-level `LICENSE` for the rewritten (non-legacy) code has not been added yet — TODO. Given the LGPL legacy base, the project license must be chosen with that in mind.

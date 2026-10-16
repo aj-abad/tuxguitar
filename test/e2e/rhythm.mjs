@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
 import { unzipSync, zipSync } from 'fflate';
 import { XMLParser } from 'fast-xml-parser';
+import { audioTarget } from '../../scripts/audio-target.mjs';
 
 mkdirSync('.cache', { recursive: true });
 const output = mkdtempSync(resolve('.cache/rhythm-e2e-'));
@@ -19,9 +20,19 @@ const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@'
   isArray: name => ['TGTrack', 'TGMeasure', 'TGBeat', 'voice', 'note'].includes(name) });
 const savedBeats = () => parser.parse(new TextDecoder().decode(unzipSync(readFileSync(saved))['content.xml']))
   .TuxGuitarFile.TGSong.TGTrack[0].TGMeasure[1].TGBeat.filter(beat => beat.voice[0]['@empty'] !== 'true');
-const app = await _electron.launch({ args: [resolve('.'), `--user-data-dir=${join(output, 'profile')}`], env: { ...process.env, TG_HEADLESS: '1' } });
+const packagedApp = process.env.TG_TEST_PACKAGED_APP;
+const app = await _electron.launch({
+  ...(packagedApp ? { executablePath: resolve(packagedApp) } : {}),
+  args: [...(packagedApp ? [] : [resolve('.')]), `--user-data-dir=${join(output, 'profile')}`],
+  env: { ...process.env, TG_HEADLESS: '1' },
+});
 let page;
 const errors = [];
+async function screenshot(name) {
+  // Behavioral assertions run for both builds. Hidden packaged windows can
+  // suspend screenshot capture; the development run retains visual evidence.
+  if (!packagedApp) await page.screenshot({ path: join(output, name) });
+}
 async function dialogs(open = original) {
   await app.evaluate(({ dialog }, { open, saved }) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [open] });
@@ -110,7 +121,7 @@ try {
   await key('.');
   await field('note-dots', 1);
   await rendered();
-  await page.screenshot({ path: join(output, 'rhythm.png') });
+  await screenshot('rhythm.png');
   console.log('PASS: click rest, enter notes/chords, delete, rest, undo, duration, dots and collision recovery');
 
   await page.getByRole('button', { name: 'Save As…', exact: true }).click();
@@ -149,7 +160,11 @@ try {
   console.log('PASS: structural Save As, undo-save-redo-save and reopen through the real document IPC');
 
   // A live sidecar tick (not only UI interpolation) must reach the edited bar.
-  const binary = `sidecar/bin/tuxguitar-sidecar${process.platform === 'win32' ? '.exe' : ''}`;
+  const target = audioTarget();
+  const binary = packagedApp
+    ? join(await app.evaluate(() => process.resourcesPath), 'sidecar', target.binary)
+    : join('sidecar/bin', target.folder, target.binary);
+  if (packagedApp) assert.ok(existsSync(binary), 'The packaged application must contain its audio sidecar.');
   if (existsSync(binary)) {
     await page.waitForFunction(async () => await window.tg.getSidecarStatus() === 'ready');
     await page.evaluate(() => {
@@ -166,7 +181,7 @@ try {
       const line = document.querySelector('.tab-playhead');
       return line && line.getAttribute('x1') !== x && getComputedStyle(line).stroke !== 'none' && line.getBoundingClientRect().height > 0;
     }, playheadX, { polling: 50 });
-    await page.screenshot({ path: join(output, 'playhead.png') });
+    await screenshot('playhead.png');
     await page.getByRole('button', { name: 'Stop playback', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('[aria-label="Stop playback"]').disabled);
     assert.equal(await page.locator('.tab-playhead').count(), 0);
@@ -179,12 +194,12 @@ try {
   await page.waitForFunction(() => window.innerWidth <= 800);
   await page.waitForTimeout(250);
   await rendered();
-  await page.screenshot({ path: join(output, 'rhythm-narrow.png') });
+  await screenshot('rhythm-narrow.png');
   assert.deepEqual(errors, []);
   console.log(`Evidence: ${output}`);
 } catch (error) {
   if (page && !page.isClosed()) {
-    await page.screenshot({ path: join(output, 'failure.png') }).catch(() => {});
+    await screenshot('failure.png').catch(() => {});
     console.error((await page.locator('body').innerText()).slice(0, 3000));
   }
   console.error(`Evidence: ${output}`);

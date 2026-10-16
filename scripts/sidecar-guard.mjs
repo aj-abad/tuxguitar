@@ -1,49 +1,23 @@
-#!/usr/bin/env node
-// Audio-sidecar gate. Runs before `nuxt dev` (see the "dev" script).
-//
-// Ensures the Rust audio sidecar binary exists before starting dev. If it's
-// missing, build it once (scripts/build-sidecar.mjs: downloads the SoundFont +
-// `cargo build --release`).
-//
-// Policy: NEVER block dev. The app runs fine without the sidecar (playback is
-// reports that audio is unavailable). So every failure path here — no
-// Rust toolchain, build error — warns and exits 0 so `nuxt dev` still starts.
-// Set DEV_SKIP_SIDECAR=1 to skip the check entirely.
-import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+// Audio is optional for editing. A failed build must not block the dev server.
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { audioTarget } from './audio-target.mjs';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const BIN = join(ROOT, 'sidecar', 'bin', process.platform === 'win32' ? 'tuxguitar-sidecar.exe' : 'tuxguitar-sidecar')
-const BUILD = join(ROOT, 'scripts', 'build-sidecar.mjs')
-
-if (process.env.DEV_SKIP_SIDECAR === '1') {
-  console.log('[dev] DEV_SKIP_SIDECAR=1 — skipping sidecar check')
-  process.exit(0)
+if (process.env.DEV_SKIP_SIDECAR !== '1') {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  try {
+    const target = audioTarget();
+    if (!existsSync(join(root, 'sidecar/bin', target.folder, target.binary)) ||
+        !existsSync(join(root, 'sidecar/bin/GeneralUser.sf2'))) {
+      console.log('[dev] building .NET audio (first run downloads the SoundFont and runtime)…');
+      const build = spawnSync(process.execPath, [join(root, 'scripts/build-sidecar.mjs')], {
+        cwd: root, stdio: 'inherit', windowsHide: true,
+      });
+      if (build.error || build.status !== 0) throw new Error('Install the .NET 10 SDK, then run pnpm sidecar:build.');
+    }
+  } catch (error) {
+    console.warn(`[dev] continuing without audio: ${error.message}`);
+  }
 }
-
-if (existsSync(BIN)) {
-  console.log('[dev] audio sidecar present')
-  process.exit(0)
-}
-
-// Missing — need cargo to build. Pre-check so we don't download 32MB then fail.
-const cargo = spawnSync('cargo', ['--version'], { stdio: 'ignore' })
-if (cargo.error || cargo.status !== 0) {
-  console.warn(
-    '[dev] audio sidecar not built and `cargo` not found — continuing WITHOUT audio.\n' +
-    '      Install Rust (https://rustup.rs), then run `pnpm sidecar:build`.',
-  )
-  process.exit(0)
-}
-
-console.log('[dev] audio sidecar missing — building (first run downloads ~32MB SoundFont + compiles Rust)…')
-const build = spawnSync(process.execPath, [BUILD], { stdio: 'inherit', windowsHide: true })
-if (build.error || build.status !== 0) {
-  console.warn('[dev] sidecar build failed — continuing WITHOUT audio. Fix with `pnpm sidecar:build`.')
-  process.exit(0)
-}
-
-console.log('[dev] audio sidecar built')
-process.exit(0)

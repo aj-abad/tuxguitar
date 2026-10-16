@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64;osx-x64;osx-arm64;linux-x64;linux-arm64</RuntimeIdentifiers>
+    <AssemblyName>tabbycat-audio</AssemblyName>
+    <RootNamespace>Tabbycat.Audio</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MeltySynth" Version="2.4.1" />
+    <PackageReference Include="Ultz.Native.SDL" Version="2.32.10" />
+    <Compile Remove="tests/**/*.cs" />
+    <None Update="licenses/*.txt" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

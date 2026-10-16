@@ -2,8 +2,8 @@
 
 > **Status:** Living plan — partially implemented. Core architecture decisions resolved 2026-06-03; **revised 2026-10-16** to match implemented state (see [§0 Current status](#0-current-status-2026-10-16) and [§14 Changelog](#14-changelog)).
 > **Product:** **Tabbycat** — a rewrite of the TuxGuitar desktop app onto **Electron + Nuxt 4 (Vue 3) + TypeScript**, replacing the Java/SWT/Cocoa UI.
-> **Audio:** a native **Rust sidecar** (`cpal` + `oxisynth`) — this *replaces* TuxGuitar's Java/Gervill sound engine (an evolution of the original "keep Java in a GraalVM sidecar" decision; see [D2](#d2--audio-native-rust-sidecar-)).
-> **Platforms:** macOS release configuration and Windows development/runtime. Windows packaging and Linux support remain open.
+> **Audio:** a self-contained **.NET 10 sidecar** (`SDL2` + `MeltySynth`) — this *replaces* TuxGuitar's Java/Gervill sound engine (an evolution of the original "keep Java in a GraalVM sidecar" decision; see [D2](#d2--audio-self-contained-net-sidecar-)).
+> **Platforms:** macOS release configuration and Windows development/runtime, including an unsigned unpacked Windows build. Signed installers, native macOS audio qualification, and Linux support remain open.
 
 ---
 
@@ -23,7 +23,7 @@ What exists in the tree today. Legend: ✅ done · 🚧 in progress · ⬜ not s
 | Native `.tg` **read** in TS | ✅ | `shared/tg-reader.ts` (`parseTgFile`). One golden test (`china.tg`). |
 | Song model in TS | ✅ | `shared/model.ts` — `TGSong → … → TGNote`, precise-tick constants. |
 | Score/tab rendering | 🚧 | Custom `tab-layout.ts` → SVG tab editor by default; alphaTab comparison retained. Wrapped/continuous views, zoom, spacing and nearby-system rendering. Full engraving remains open. |
-| **Rust audio sidecar** | ✅ | `sidecar/` — cpal + oxisynth; stdio JSON-RPC; `synth.load/play/stop/seek`; emits `ready`/`tick`/`playbackEnded`. |
+| **.NET audio sidecar** | ✅ | `sidecar/` — SDL2 + MeltySynth; stdio JSON-RPC; `synth.load/play/stop/seek`; emits `ready`/`tick`/`playbackEnded`. |
 | MIDI generation | ✅ | `shared/midi-export.ts` (TS) — model → MIDI events sent to the sidecar. |
 | Playback progress | 🚧 | Sidecar tick events → `usePlayback()` interpolation → progress and custom-tab playhead. Playback autoscroll remains open. Missing audio reports an error. |
 | Transport | 🚧 | play / stop / seek only. No pause, loop, count-in, metronome, per-track mute/solo. |
@@ -32,7 +32,7 @@ What exists in the tree today. Legend: ✅ done · 🚧 in progress · ⬜ not s
 | Editing / command bus / undo | 🚧 | Per-string cursor, cell/column ranges, stable IDs, note/rhythm edits, Alt move/duplicate commands and atomic undo/redo. New songs/measures and cross-bar operations remain open. |
 | Exporters | ⬜ | — |
 | **TGX text format + AI** (new workstream) | 🚧 | Format spec + `.tg`→`.tgx` converter exist; AI features designed, not wired. See [§13](#13-tgx-text-format--ai-new-workstream). |
-| Packaging | 🚧 | `electron-builder` `.dmg`, hardened runtime configured; smoke test (`TG_SMOKE`). Signing/notarization unverified. |
+| Packaging | 🚧 | Target-specific .NET runtime/SDL/SoundFont resources; unsigned Windows unpacked build and behavioral playback checks. macOS audio cross-publishes for x64/arm64; native device checks, signing and notarization remain open. |
 | Golden corpus harness | 🚧 | Single `.tg` fixture; full multi-format corpus from the Java build not captured yet. |
 | Legacy Java | ✅ relocated | Moved to `tuxguitar-java/`; reference only, not built by the Node toolchain. |
 
@@ -48,10 +48,10 @@ This is a large undertaking: the legacy base is **~183K LOC of Java across 1,761
 
 1. **Rewrite the UI** as an Electron app with a **Nuxt 4 / Vue 3** renderer (SPA mode). Delete the SWT/Cocoa stack. ✅
 2. **Own the tab writing/rendering engine.** Custom TS geometry + SVG provides tab-only editing with control over appearance and interaction. alphaTab remains a comparison renderer — see [D1](#d1--custom-tab-rendering-and-alphatab-comparison).
-3. **Audio via a native Rust sidecar.** A standalone Rust binary (`cpal` + `oxisynth`) loads a SoundFont, synthesizes MIDI events generated in TS, outputs PCM itself, and streams tick/position events back for cursor sync. ✅
+3. **Audio via a self-contained .NET sidecar.** A standalone .NET binary (`SDL2` + `MeltySynth`) loads a SoundFont, synthesizes MIDI events generated in TS, outputs PCM itself, and streams tick/position events back for cursor sync. ✅
 4. **Port the model, editing, native `.tg` format, and exporters to TypeScript** incrementally, validated by **golden-file round-trip tests**. 🚧 (`.tg` read + model done; write/editing/exporters pending.)
 
-**Consequence of the Rust synth:** the sidecar is **load-bearing and permanent** for audio — but it is *audio-only*. It does **not** read codecs and contains **no JVM**. The original plan kept TuxGuitar's Java engine (Gervill) behind a GraalVM sidecar and used that same sidecar as a transitional codec reader; both of those ideas were dropped in favor of a self-contained Rust synth plus TS/alphaTab codecs (see [§14](#14-changelog)).
+**Consequence of the .NET synth:** the sidecar is **load-bearing and permanent** for audio — but it is *audio-only*. It does **not** read codecs and contains **no JVM**. The original plan kept TuxGuitar's Java engine (Gervill) behind a GraalVM sidecar and used that same sidecar as a transitional codec reader; both of those ideas were dropped in favor of a self-contained .NET synth plus TS/alphaTab codecs (see [§14](#14-changelog)).
 
 **Rough order of magnitude:** multi-engineer effort, ~12–18 months to *full* parity (171 commands × 157 dialogs is the long tail). The read/play slice landed early; a v1 feature subset will be chosen later (parity remains the eventual bar).
 
@@ -86,9 +86,9 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 | **MIDI read/write** | `common/TuxGuitar-midi` | 1.9K | **Port to TS** (well-specified). MIDI *generation* for playback already in TS (`shared/midi-export.ts`). |
 | **MusicXML / LilyPond / ASCII / PDF / SVG writers** | `common/` + `desktop/` | ~6K | **Port to TS** incrementally. |
 | **Native `.tg` format** (`TGStream`) | `common/TuxGuitar-lib` | part of 32K | **Crown jewel.** Reader **ported** (`tg-reader.ts`); writer pending; round-trip golden-gated. Never depends on the sidecar. |
-| **Gervill software synth** | `desktop/gervill` | 29K | **Dropped.** Replaced by `oxisynth` (Rust SF2 synth) in the sidecar. |
-| **Synth plumbing / player / sequencer** | `desktop/TuxGuitar-synth`, `player/*` | ~3K+ | **Dropped.** MIDI event generation is TS; scheduling + synth are the Rust sidecar. |
-| **macOS AudioUnit MIDI bridge (JNI)** | `desktop/TuxGuitar-AudioUnit` | 8 native files | **Dropped.** The Rust synth outputs PCM via cpal; native MIDI out not required. |
+| **Gervill software synth** | `desktop/gervill` | 29K | **Dropped.** Replaced by `MeltySynth` (C# SF2 synth) in the sidecar. |
+| **Synth plumbing / player / sequencer** | `desktop/TuxGuitar-synth`, `player/*` | ~3K+ | **Dropped.** MIDI event generation is TS; scheduling + synth are the .NET sidecar. |
+| **macOS AudioUnit MIDI bridge (JNI)** | `desktop/TuxGuitar-AudioUnit` | 8 native files | **Dropped.** The .NET synth outputs PCM via SDL2; native MIDI out not required. |
 | **UI toolkit abstraction + SWT/Cocoa impl** | `desktop/TuxGuitar-ui-toolkit*` | ~11K | **Deleted (kept in `tuxguitar-java/` as reference).** The `ui.*` contract informs the Vue layer. |
 | **Application** (actions, views, dialogs, editor, transport, undo, docking) | `desktop/TuxGuitar` | 52K | **Rewrite** as Nuxt renderer + TS command bus. 201 action classes (~171 IDs), 157 dialogs, 258 view classes. |
 | **Plugins (Java SPI)** | 28 `TGPlugin` services | — | **Replace** with a TS module-registration registry. |
@@ -108,7 +108,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 
 ---
 
-## 4. Target architecture (Electron + Nuxt 4 + Rust sidecar)
+## 4. Target architecture (Electron + Nuxt 4 + .NET sidecar)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -122,13 +122,13 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
         │ contextIsolation, sandbox)                │ newline-delimited JSON-RPC
         │                                           │
 ┌───────▼───────────────────────────────┐  ┌────────▼───────────────────────┐
-│ Renderer  (Chromium + Nuxt 4 / Vue 3) │  │ Rust audio sidecar              │
-│  SPA mode (ssr:false)                  │  │ (cpal + oxisynth)               │
+│ Renderer  (Chromium + Nuxt 4 / Vue 3) │  │ .NET audio sidecar             │
+│  SPA mode (ssr:false)                  │  │ (SDL2 + MeltySynth)             │
 │                                        │  │                                 │
 │  • App shell: toolbar, transport,      │  │  • Loads SoundFont (SF2)        │
 │    track strip, dialogs (TODO)         │  │  • Synthesizes scheduled MIDI   │
-│  • Song model + managers (TS) (TODO    │  │    events → PCM out (Core Audio │
-│    edit/undo)                          │  │    via cpal)                    │
+│  • Song model + editing/history (TS)  │  │    events → PCM output         │
+│                                        │  │    via native SDL2              │
 │  • Custom tab geometry → SVG          │◀─┤  • Emits tick/position events   │
 │  • usePlayback(): interpolated cursor  │  │    + playbackEnded over stdout  │
 └────────────────────────────────────────┘  └─────────────────────────────────┘
@@ -154,8 +154,8 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 | Language | **TypeScript** | ✅ Shared types across main/preload/renderer. |
 | UI | **Nuxt 4 / Vue 3** (SPA) | ✅ `useState` + Tailwind v4 + Phosphor. Pinia / component lib / i18n deferred. |
 | Tab render + comparison | **Custom TS/SVG**; alphaTab vendored in `packages/alphatab` | Tab-only spike; alphaTab comparison retained. GP import not wired yet. |
-| Audio | **Rust sidecar — cpal + oxisynth** | ✅ Replaces Gervill/Java. |
-| Sidecar runtime | **Native Rust binary (cargo)** | ✅ No JVM, no GraalVM. |
+| Audio | **.NET sidecar — SDL2 + MeltySynth** | ✅ Replaces Gervill/Java. |
+| Sidecar runtime | **Self-contained .NET executable (dotnet publish)** | ✅ No JVM, no GraalVM. |
 | Build | **Vite** (via Nuxt) + `nuxt-electron` | ✅ |
 | Packaging | **electron-builder** | 🚧 `.dmg` + hardened runtime; notarization unverified. |
 | Tests | **Vitest** (+ Playwright later) | 🚧 golden harness for `.tg`. |
@@ -171,11 +171,13 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 - Runtime column/note IDs belong to editor history, not the `.tg` schema. Validated commands produce model patches and source provenance; undo and source-preserving save use the same operations. Full accessibility is explicitly deferred to its own pass after rendering.
 - **License:** alphaTab is MPL-2.0 (weak, file-level copyleft). Using its public APIs is fine. alphaTab is **vendored as source** under `packages/alphatab` (pinned); if we modify its files, those files stay MPL — isolate and publish such changes. Prefer extension over modification.
 
-### D2 — Audio: native Rust sidecar ✅
+### D2 — Audio: self-contained .NET sidecar ✅
 
-- Audio runs in a standalone **Rust** binary (`sidecar/`): **`oxisynth`** (SoundFont2 software synth) + **`cpal`** (Core Audio output). The renderer/main render the song to a MIDI event stream **in TS** (`shared/midi-export.ts`) and send it via `synth.load`; the sidecar schedules events to audio frames at the device sample rate, **outputs PCM itself**, and **streams `tick {qtick,bpm}` events** (~20 Hz) for cursor follow.
+- **Revised 2026-10-16:** replaced the early Rust sidecar with C# on .NET 10. Playback and writing are the product scope; recording is not planned. The TypeScript model/editor/codecs and Electron/Vue UI retain their existing ownership. `dotnet publish` bundles the runtime (not Native AOT); the package hook includes target-specific runtime/native files and GeneralUser GS.
+
+- Audio runs in a standalone **.NET** binary (`sidecar/`): **`MeltySynth`** (SoundFont2 software synth) + **`SDL2`** (native audio output). The renderer/main render the song to a MIDI event stream **in TS** (`shared/midi-export.ts`) and send it via `synth.load`; the sidecar schedules events to audio frames at the device sample rate, **outputs PCM itself**, and **streams `tick {qtick,bpm}` events** (~20 Hz) for cursor follow. Reusable buffers feed about 100 ms of SDL audio; progress is generated frames minus queued frames, with unmeasured final hardware-buffer latency. A separate stdin thread leaves reporting responsive. Seek restores channel setup without retriggering earlier notes.
 - **What changed from the original plan:** Gervill and the Java player/sequencer are **dropped**, not kept; there is **no GraalVM native-image** and **no JVM** in the sidecar. The bundled SoundFont is **GeneralUser GS** (downloaded at build time), not TuxGuitar's Magic Sound Font.
-- **AudioUnit JNI bridge:** dropped (PCM out via cpal; native MIDI out not needed).
+- **AudioUnit JNI bridge:** dropped (PCM out via SDL2; native MIDI out not needed).
 - **Web synth** (alphaSynth / WASM SF2 / Web Audio) remains a possible *future* swap that would let audio move into the renderer and retire the sidecar entirely.
 
 ### D3 — Codecs: TS + alphaTab, no codec sidecar ✅
@@ -209,7 +211,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 
 ### Phase 0 — Foundations & safety net  🚧 (mostly done)
 - ✅ Electron + Nuxt 4 SPA skeleton via `nuxt-electron`: main/preload/renderer, contextIsolation/sandbox, typed IPC bridge, `app://` protocol.
-- ✅ Native **Rust sidecar** exposing `synth.load/play/stop/seek` + `ready`/`tick`/`playbackEnded`. (Originally specified as a GraalVM native-image of the Java core — superseded by D2.)
+- ✅ Self-contained **.NET sidecar** exposing `synth.load/play/stop/seek` + `ready`/`tick`/`playbackEnded`. (Originally specified as a GraalVM native-image of the Java core — superseded by D2.)
 - 🚧 **Golden-file harness** — only one `.tg` fixture so far; the full multi-format corpus from the Java build is not captured yet.
 - ✅ **Spike 0a — audio-sync de-risking.** The sidecar owns Core Audio output; the renderer owns the cursor. Implemented: sidecar emits high-res tick events; `usePlayback()` interpolates between them with `requestAnimationFrame`. Perceived offset is acceptable on the sample; a constant offset can be calibrated out. (No-go fallbacks from the original plan unused.)
 - 🚧 **Exit:** app launches on macOS ✅; sidecar plays a `.tg` ✅; Spike 0a met ✅; **remaining:** full golden harness, CI, signing/notarization verification.
@@ -219,7 +221,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 - ⬜ Open GP3–7 / MusicXML / MIDI (dialog filters present; parsing returns `null`). ⬜ Track table, richer navigation/scroll.
 - **Exit:** open GP3–7, MusicXML, MIDI, `.tg` and render faithfully vs. golden screenshots.
 
-### Phase 2 — Playback (Rust sidecar)  🚧
+### Phase 2 — Playback (.NET sidecar)  🚧
 - ✅ play / stop with progress driven by sidecar ticks; seek protocol exists. Native Windows clock/start/stop checked with silent audio.
 - ✅ Audio-driven playhead in the custom tab renderer.
 - ⬜ Playback autoscroll and audible fidelity comparison.
@@ -247,7 +249,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 - **Exit:** parity checklist (171 commands / 157 dialogs) accounted for; v1 subset shippable.
 
 ### Phase 7 — Harden & ship  ⬜  (reframed)
-- The original Phase 7 was "shrink the sidecar / retire the JVM" — **already true**: the sidecar has been Rust (audio-only) from the start, so there is no JVM to retire and no codec role to remove.
+- The original Phase 7 was "shrink the sidecar / retire the JVM" — **already true**: the audio-only sidecar now uses self-contained .NET, so there is no JVM to retire and no codec role to remove.
 - Remaining: performance pass (large scores, scroll/render latency, audio-sync jitter), accessibility, auto-update, crash reporting, final notarization. Decide whether to **delete** `tuxguitar-java/` once all needed ports land (currently kept as reference).
 - **Exit:** shipped macOS `.app`; parity + performance accepted.
 
@@ -262,7 +264,8 @@ The legacy suite (~14 classes) cannot anchor a rewrite. **Build the safety net f
 3. **Differential testing.** Where alphaTab and a TS codec both read a format, diff the resulting models in CI; discrepancies block trusting the TS port.
 4. **Visual regression.** Render the corpus with alphaTab, perceptual-diff vs. screenshots of the Java renderer (tolerance).
 5. **Playback regression.** Compare the sidecar's event/timing stream against the legacy player; optionally fingerprint offline-rendered audio.
-6. **E2E (Playwright + Electron).** Open → edit → save → reopen, transport, a sampling of dialogs.
+6. **.NET audio checks.** `pnpm test:audio` covers sample-rate/tempo math, real SoundFont PCM, seek/channel state, invalid requests, startup failures, and EOF cleanup. Process tests use SDL dummy output by default; the Electron rhythm fixture uses the real device with silent MIDI. Native macOS/Linux playback, audible synth comparisons, and signed release packaging remain open.
+7. **E2E (Playwright + Electron).** Open → edit → save → reopen, transport, a sampling of dialogs.
 
 ---
 
@@ -274,9 +277,9 @@ The legacy suite (~14 classes) cannot anchor a rewrite. **Build the safety net f
 | Thin existing tests | High | Capture the golden corpus from `tuxguitar-java/` before porting each codec. |
 | **Audio sync across the process boundary** | High→Med | **Spike 0a implemented** (tick events + renderer interpolation; audio stays in the sidecar, no raw PCM over IPC). Watch jitter under load / long playback. |
 | **alphaTab adapter drift** (TG model vs. alphaTab `Score`) | Medium | One explicit comparison adapter (`tgSongToScore`), golden-tested; default custom tab reads the TG model directly. |
-| `oxisynth` fidelity / SoundFont quality vs. Gervill | Medium | GeneralUser GS is broad-coverage; A/B against the Java mix; web-synth swap remains a fallback. |
+| `MeltySynth` fidelity / SoundFont quality vs. Gervill | Medium | GeneralUser GS is broad-coverage; A/B against the Java mix; web-synth swap remains a fallback. |
 | Nuxt-in-Electron (unused SSR, routing/CSP, `generate`-only) | Medium | `ssr:false` + `nuxt generate` + `app://` + `nuxt-electron`; `build`→`generate` enforced. |
-| Shipping the native sidecar (build, soundfont size, startup) | Medium | Small Rust binary; supervise/restart from main; app degrades gracefully to silent when absent. |
+| Shipping the native sidecar (build, soundfont size, startup) | Medium | Bundle the .NET runtime, native SDL library, and SoundFont; report unavailable audio while preserving editing. |
 | Long-tail scope (171 cmds / 157 dialogs) | Medium | Explicit parity checklist; prioritize by usage; conscious drops with sign-off. |
 | macOS signing/notarization | Low–Med | Validate early (Phase 0 packaging), not at the end. |
 
@@ -284,16 +287,16 @@ The legacy suite (~14 classes) cannot anchor a rewrite. **Build the safety net f
 
 ## 10. What gets deleted vs. kept
 
-**Replaced by the web UI / Rust sidecar** (retained under `tuxguitar-java/` as reference, deleted from the product):
+**Replaced by the web UI / .NET sidecar** (retained under `tuxguitar-java/` as reference, deleted from the product):
 - `desktop/TuxGuitar-ui-toolkit-swt` + the `ui-toolkit` abstraction; `TuxGuitar-cocoa-integration-swt`, `TuxGuitar-tray-swt`, `TuxGuitar-image-swt`, `TuxGuitar-awt-graphics`
 - The Maven reactor, the SWT-install step, and the `build-scripts/tuxguitar-macosx-swt-cocoa` assembly
-- `desktop/gervill`, `TuxGuitar-synth*`, the player/sequencer — **dropped** (Rust `oxisynth` replaces them)
+- `desktop/gervill`, `TuxGuitar-synth*`, the player/sequencer — **dropped** (.NET `MeltySynth` replaces them)
 - `desktop/TuxGuitar-AudioUnit` + native bridge — **dropped**
 
 **Kept as reference (port from, don't ship):**
 - The Java `common/` codecs and `.tg`/`TGStream` logic — the reference implementations, ported to TS per-format and golden-gated.
 
-The Java *core* remains the reference implementation throughout; the renderer/editor/model/`.tg`/exporters move to TS, and audio is a self-contained Rust synth.
+The Java *core* remains the reference implementation throughout; the renderer/editor/model/`.tg`/exporters move to TS, and audio is a self-contained .NET synth with native SDL output.
 
 ---
 
@@ -302,7 +305,7 @@ The Java *core* remains the reference implementation throughout; the renderer/ed
 - `electron/` — main + preload (TS), IPC contract (`shared/ipc.ts`), `SidecarManager`
 - `app/` — Nuxt 4 renderer (SPA): components, composables (`useSong`, `usePlayback`), `ScoreViewer` with custom tab and alphaTab comparison
 - `shared/` — `model.ts`, `tg-reader.ts`, `midi-export.ts`, `tg-to-alphatab.ts`, `ipc.ts`
-- `sidecar/` — Rust audio sidecar (cpal + oxisynth); `build.sh` fetches the SoundFont + `cargo build --release`
+- `sidecar/` — .NET audio sidecar (SDL2 + MeltySynth); `scripts/build-sidecar.mjs` fetches the SoundFont and publishes the runtime/native library for each target
 - `packages/alphatab/` — vendored alphaTab source
 - `test/golden/` — Vitest fixtures + harness (currently `.tg`)
 - `docs/` — `tgx-format.md`, `ai-features.md`
@@ -316,11 +319,11 @@ The Java *core* remains the reference implementation throughout; the renderer/ed
 | # | Question | Decision |
 |---|---|---|
 | 1 | Rendering | **Custom tab-only TS/SVG engine**; alphaTab retained as a comparison view. |
-| 2 | Sidecar runtime | **Native Rust binary** (cargo). *(Was: GraalVM native-image of the Java core — superseded.)* |
+| 2 | Sidecar runtime | **Self-contained .NET executable** (dotnet publish). *(Was: GraalVM native-image of the Java core — superseded.)* |
 | 3 | UI framework | **Nuxt 4** (Vue 3, SPA). `useState` + Tailwind today; Pinia/component-lib/i18n deferred. |
 | 4 | Parity bar | **Full parity is the eventual goal.** v1 subset chosen later. |
 | 5 | v1 scope | Deferred — see #4. |
-| 6 | Audio engine | **Rust `oxisynth` + `cpal`.** Gervill/Java player **dropped**. *(Was: keep Gervill in the sidecar — superseded.)* |
+| 6 | Audio engine | **.NET `MeltySynth` + `SDL2`.** Gervill/Java player **dropped**. *(Was: keep Gervill in the sidecar — superseded.)* |
 | 7 | Codec sidecar | **None.** `.tg` in TS; other formats via alphaTab / TS ports. *(Was: transitional Java codec reads — superseded.)* |
 | 8 | Native text format + AI | **TGX (`.tgx`, JSON) added** as a native text format and AI context substrate — see [§13](#13-tgx-text-format--ai-new-workstream). |
 | 9 | Product name | **Tabbycat.** |
@@ -347,6 +350,8 @@ Not in the original plan; added during the rewrite. See `docs/tgx-format.md` and
 ---
 
 ## 14. Changelog
+
+- **2026-10-16 (.NET audio pivot):** Replaced Rust/cpal/oxisynth with a .NET 10 C# playback sidecar using MeltySynth and SDL2. Retained stdio load/play/stop/seek and ready/tick/end events. Added device-queue progress, startup/error/EOF handling, self-contained publishing and package resources, and synth/protocol regression checks. Fixed vendored alphaTab build metadata lookup for Git worktrees. The editor and codecs remain TypeScript; native macOS/Linux and audible fidelity qualification remain open.
 
 - **2026-10-16 (custom tab engine spike):** Added independent TS layout and SVG tab rendering, precise empty-cell hit/caret bounds, rectangular/column ranges, stable runtime IDs, command/keymap separation, single-measure column moves/copies and source-preserving XML provenance. Added zoom/spacing/wrapping, nearby-system rendering and an audio playhead. alphaTab remains a comparison renderer. Integration coverage includes native Alt keys, range deletion, atomic undo/save/reopen and 500-measure input/render observations. Full engraving and the dedicated accessibility pass remain open.
 - **2026-10-16 (note/rhythm milestone):** Added note/chord entry, deletion, rests, duration/dots and empty-string/rest navigation within existing measures. The shared reducer preserves bar length and other-voice timing; its patch stream updates original XML tokens. Extended Electron tests cover structural save/reopen, render concurrency and the native audio clock/Stop control with a silent fixture. New-song/measure creation, cross-bar operations and full format parity remain open.

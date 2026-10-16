@@ -34,13 +34,17 @@ while (!fs.existsSync(path.resolve(repositoryRoot, '.git'))) {
 }
 
 function getGitBranch(): string {
-    const filepath = path.resolve(repositoryRoot, '.git/HEAD');
+    const marker = path.resolve(repositoryRoot, '.git');
+    const gitDirectory = fs.statSync(marker).isDirectory()
+        ? marker
+        : path.resolve(repositoryRoot, fs.readFileSync(marker, 'utf8').replace(/^gitdir:\s*/, '').trim());
+    const filepath = path.join(gitDirectory, 'HEAD');
     if (!fs.existsSync(filepath)) {
-        throw new Error('.git/HEAD does not exist');
+        throw new Error('Git HEAD does not exist');
     }
     const buf = fs.readFileSync(filepath);
     const match = /ref: refs\/heads\/([^\n]+)/.exec(buf.toString());
-    return match ? match[1] : '';
+    return match ? match[1].trim() : '';
 }
 
 export function licenseHeaderPlugin() {

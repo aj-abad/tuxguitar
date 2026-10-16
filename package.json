@@ -13,6 +13,7 @@
     "smoke": "pnpm run generate && node scripts/smoke.mjs",
     "dist": "pnpm run generate && electron-builder --mac",
     "sidecar:build": "node scripts/build-sidecar.mjs",
+    "test:audio": "dotnet run --project sidecar/tests/AudioTests.csproj --configuration Release && node --test test/audio-sidecar.test.mjs",
     "ai:tgx": "node scripts/ai/run.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
