@@ -8,6 +8,7 @@ import type { SidecarStatus } from "../shared/ipc";
 interface PendingRequest {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 interface SidecarMessage {
@@ -32,14 +33,17 @@ export class SidecarManager extends EventEmitter {
   }
 
   private static binaryCandidates(): string[] {
+    const binary = process.platform === "win32" ? "tuxguitar-sidecar.exe" : "tuxguitar-sidecar";
     return [
-      join(__dirname, "../sidecar/bin/tuxguitar-sidecar"),
-      join(__dirname, "../../sidecar/bin/tuxguitar-sidecar"),
+      join(process.resourcesPath, "sidecar", binary),
+      join(__dirname, "../sidecar/bin", binary),
+      join(__dirname, "../../sidecar/bin", binary),
     ];
   }
 
   private static soundfontCandidates(): string[] {
     return [
+      join(process.resourcesPath, "sidecar/GeneralUser.sf2"),
       join(__dirname, "../sidecar/bin/GeneralUser.sf2"),
       join(__dirname, "../../sidecar/bin/GeneralUser.sf2"),
     ];
@@ -62,17 +66,24 @@ export class SidecarManager extends EventEmitter {
     const [cmd, args] = launch;
     console.log(`[sidecar] launching: ${cmd} ${args.join(" ")}`);
     this._status = "starting";
-    this.process = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"] });
+    this.process = spawn(cmd, args, { stdio: ["pipe", "pipe", "inherit"], windowsHide: true });
 
     this.process.stdout!.on("data", (chunk: Buffer) => this.handleData(chunk));
+    this.process.stdin!.on("error", err => {
+      this._status = "error";
+      this.rejectPending(err.message);
+      this.emit("status", this._status);
+    });
     this.process.on("exit", (code) => {
       console.log(`[sidecar] exited (code=${code})`);
       this._status = "error";
+      this.rejectPending("Audio process exited.");
       this.emit("status", this._status);
     });
     this.process.on("error", (err) => {
       console.error(`[sidecar] spawn error: ${err.message}`);
       this._status = "error";
+      this.rejectPending(err.message);
       this.emit("status", this._status);
     });
   }
@@ -96,6 +107,7 @@ export class SidecarManager extends EventEmitter {
         } else if (msg.id != null) {
           const req = this.pending.get(msg.id);
           if (req) {
+            clearTimeout(req.timer);
             this.pending.delete(msg.id);
             if (msg.error) req.reject(new Error(msg.error));
             else req.resolve(msg.result);
@@ -113,9 +125,14 @@ export class SidecarManager extends EventEmitter {
     }
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Audio request timed out: ${method}`));
+      }, 10_000);
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,
         reject,
+        timer,
       });
       const msg = params !== undefined
         ? JSON.stringify({ id, method, params })
@@ -141,8 +158,17 @@ export class SidecarManager extends EventEmitter {
   }
 
   kill(): void {
+    this.rejectPending("Audio process stopped.");
     this.process?.kill();
     this.process = null;
     this._status = "not-found";
+  }
+
+  private rejectPending(message: string): void {
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error(message));
+    }
+    this.pending.clear();
   }
 }

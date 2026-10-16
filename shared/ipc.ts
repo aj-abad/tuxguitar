@@ -1,4 +1,10 @@
 import type { TGSong } from "./model";
+import type { SongEdit } from "./editor";
+
+export interface OpenDocument { id: string; fileName: string; song: TGSong }
+export interface DocumentEdits { id: string; edits: SongEdit[] }
+export type DocumentCommand = "open" | "save" | "saveAs" | "undo" | "redo" | "close" | "reload";
+export interface DocumentMenuState { hasSong: boolean; dirty: boolean; busy: boolean; canUndo: boolean; canRedo: boolean }
 
 export const IpcChannels = {
   // app
@@ -6,8 +12,14 @@ export const IpcChannels = {
   appPing: "app:ping",
   // file
   fileOpenDialog: "file:openDialog",
+  fileOpenDropped: "file:openDropped",
+  fileSave: "file:save",
+  fileConfirmChanges: "file:confirmChanges",
+  documentMenuState: "document:menuState",
+  documentCommand: "document:command",
+  windowClose: "window:close",
+  windowReload: "window:reload",
   // menu events (main → renderer via webContents.send)
-  menuTriggerOpen: "menu:triggerOpen",
   // sidecar invoke (renderer → main)
   sidecarStatus: "sidecar:status",
   sidecarPlay: "sidecar:play",
@@ -27,18 +39,24 @@ export interface TickEvent {
 }
 
 export interface TgBridge {
+  platform: string;
   versions: { node: string; chrome: string; electron: string };
   getVersion(): Promise<string>;
   ping(): Promise<"pong">;
-  openFileDialog(): Promise<TGSong | null>;
+  openFileDialog(): Promise<OpenDocument | null>;
+  openDroppedFile(file: File): Promise<OpenDocument>;
+  saveFile(document: DocumentEdits, saveAs: boolean): Promise<{ fileName: string } | null>;
+  confirmChanges(): Promise<"save" | "discard" | "cancel">;
+  updateMenu(state: DocumentMenuState): void;
+  onDocumentCommand(callback: (command: DocumentCommand) => void): () => void;
+  closeWindow(): void;
+  reloadWindow(): void;
   getSidecarStatus(): Promise<SidecarStatus>;
-  play(): Promise<void>;
+  play(document: DocumentEdits): Promise<void>;
   stop(): Promise<void>;
   seek(tick: number): Promise<void>;
   /** Register a tick event listener. Returns an unsubscribe function. */
   onTick(callback: (event: TickEvent) => void): () => void;
   /** Register a playback-ended listener. Returns an unsubscribe function. */
   onPlaybackEnded(callback: () => void): () => void;
-  /** Register a listener for menu-triggered file open. Returns an unsubscribe function. */
-  onMenuTriggerOpen(callback: () => void): () => void;
 }

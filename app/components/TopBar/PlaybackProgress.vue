@@ -1,6 +1,6 @@
 <template>
   <!-- Playback progress bar -->
-  <div class="h-1 bg-white/10 grow relative rounded-full overflow-hidden">
+  <div class="h-1 bg-white/10 grow relative rounded-full overflow-hidden" role="progressbar" aria-label="Playback progress" :aria-valuenow="Math.round(playbackProgress * 100)" aria-valuemin="0" aria-valuemax="100">
     <div
       class="absolute inset-y-0 left-0 bg-white/70 transition-none"
       :style="{ width: `${playbackProgress * 100}%` }" />
@@ -8,19 +8,5 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-
-const { song } = useSong();
-const { isPlaying, currentMeasure, playbackProgress, play } = usePlayback();
-
-const hasSong = computed(() => song.value !== null);
-
-if (typeof window !== "undefined") {
-  window.addEventListener("keydown", (e) => {
-    if (e.key === " " && hasSong.value) {
-      e.preventDefault();
-      play();
-    }
-  });
-}
+const { playbackProgress } = usePlayback();
 </script>

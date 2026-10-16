@@ -50,5 +50,6 @@ release/
 
 # Rust sidecar build artifacts
 sidecar/bin/tuxguitar-sidecar
+sidecar/bin/tuxguitar-sidecar.exe
 sidecar/bin/*.sf2
 sidecar/bin/*.jar

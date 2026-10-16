@@ -9,8 +9,12 @@ import type {
   TGVoice,
 } from "./model";
 import { QUARTER_TIME } from "./model";
+import type { NoteAddress, BeatAddress } from "./editor";
 
-export function tgSongToScore(song: TGSong): alphaTab.model.Score {
+type NoteMapping = (note: alphaTab.model.Note, address: NoteAddress) => void;
+type BeatMapping = (beat: alphaTab.model.Beat, address: BeatAddress) => void;
+
+export function tgSongToScore(song: TGSong, mapNote?: NoteMapping, mapBeat?: BeatMapping): alphaTab.model.Score {
   const score = new alphaTab.model.Score();
   score.title = song.name;
   score.artist = song.artist;
@@ -45,7 +49,7 @@ export function tgSongToScore(song: TGSong): alphaTab.model.Score {
     score.addMasterBar(mb);
   }
 
-  for (const tgTrack of song.tracks) {
+  for (const [trackIndex, tgTrack] of song.tracks.entries()) {
     const track = new alphaTab.model.Track();
     track.name = tgTrack.name;
     track.shortName = tgTrack.name.slice(0, 10);
@@ -86,7 +90,7 @@ export function tgSongToScore(song: TGSong): alphaTab.model.Score {
       staff.stringTuning.name = `${staff.stringTuning.tunings.length}-string guitar, ${tuningNotes}`;
     }
 
-    addBarsForTrack(staff, tgTrack, song.measureHeaders.length);
+    addBarsForTrack(staff, tgTrack, song.measureHeaders.length, trackIndex, mapNote, mapBeat);
   }
 
   score.finish(new alphaTab.Settings());
@@ -97,6 +101,9 @@ function addBarsForTrack(
   staff: alphaTab.model.Staff,
   tgTrack: TGTrack,
   measureCount: number,
+  trackIndex: number,
+  mapNote?: NoteMapping,
+  mapBeat?: BeatMapping,
 ): void {
   for (let mi = 0; mi < Math.min(tgTrack.measures.length, measureCount); mi++) {
     const tgMeasure = tgTrack.measures[mi];
@@ -107,7 +114,7 @@ function addBarsForTrack(
         ? alphaTab.model.Clef.F4
         : alphaTab.model.Clef.G2;
     staff.addBar(bar);
-    addVoicesForBar(bar, tgMeasure, staff.stringTuning.tunings.length);
+    addVoicesForBar(bar, tgMeasure, staff.stringTuning.tunings.length, trackIndex, mi, mapNote, mapBeat);
   }
 }
 
@@ -115,9 +122,13 @@ function addVoicesForBar(
   bar: alphaTab.model.Bar,
   tgMeasure: TGMeasure,
   stringCount: number,
+  trackIndex: number,
+  measureIndex: number,
+  mapNote?: NoteMapping,
+  mapBeat?: BeatMapping,
 ): void {
   // TG: beats[] each has voices[]. Restructure to alphaTab: voices each have beats[].
-  const voiceCount = tgMeasure.beats.length > 0 ? tgMeasure.beats[0].voices.length : 1;
+  const voiceCount = Math.max(1, ...tgMeasure.beats.map(b => b.voices.length));
 
   for (let vi = 0; vi < Math.min(voiceCount, 4); vi++) {
     const beatsForVoice = tgMeasure.beats.map((b) => ({ beat: b, voice: b.voices[vi] }));
@@ -126,9 +137,10 @@ function addVoicesForBar(
     const voice = new alphaTab.model.Voice();
     bar.addVoice(voice);
 
-    for (const { beat: tgBeat, voice: tgVoice } of beatsForVoice) {
+    for (const [beatIndex, { beat: tgBeat, voice: tgVoice }] of beatsForVoice.entries()) {
       if (!tgVoice) continue;
-      addBeat(voice, tgBeat, tgVoice, stringCount);
+      addBeat(voice, tgBeat, tgVoice, stringCount,
+        { track: trackIndex, measure: measureIndex, beat: beatIndex, voice: vi, note: 0 }, mapNote, mapBeat);
     }
   }
 
@@ -147,6 +159,9 @@ function addBeat(
   tgBeat: TGBeat,
   tgVoice: TGVoice,
   stringCount: number,
+  address: NoteAddress,
+  mapNote?: NoteMapping,
+  mapBeat?: BeatMapping,
 ): void {
   if (tgVoice.empty) return;
 
@@ -160,14 +175,16 @@ function addBeat(
   }
   if (tgBeat.text) beat.text = tgBeat.text;
 
-  for (const tgNote of tgVoice.notes) {
-    addNote(beat, tgNote, stringCount);
+  for (const [noteIndex, tgNote] of tgVoice.notes.entries()) {
+    const note = addNote(beat, tgNote, stringCount);
+    mapNote?.(note, { ...address, note: noteIndex });
   }
 
   voice.addBeat(beat);
+  mapBeat?.(beat, { track: address.track, measure: address.measure, beat: address.beat, voice: address.voice });
 }
 
-function addNote(beat: alphaTab.model.Beat, tgNote: TGNote, stringCount: number): void {
+function addNote(beat: alphaTab.model.Beat, tgNote: TGNote, stringCount: number): alphaTab.model.Note {
   const note = new alphaTab.model.Note();
   note.fret = tgNote.value;
   // TG string 1 = highest; alphaTab string N = highest (where N = stringCount).
@@ -186,6 +203,7 @@ function addNote(beat: alphaTab.model.Beat, tgNote: TGNote, stringCount: number)
     note.slideOutType = alphaTab.model.SlideOutType.Shift;
   }
   beat.addNote(note);
+  return note;
 }
 
 function tgDuration(d: TGDuration): alphaTab.model.Duration {

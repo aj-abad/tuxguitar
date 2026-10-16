@@ -1,13 +1,17 @@
 # TuxGuitar → Electron Migration Plan
 
-> **Status:** Living plan — partially implemented. Core architecture decisions resolved 2026-06-03; **revised 2026-06-03** to match implemented state (see [§0 Current status](#0-current-status-2026-06-03) and [§14 Changelog](#14-changelog)).
+> **Status:** Living plan — partially implemented. Core architecture decisions resolved 2026-06-03; **revised 2026-10-16** to match implemented state (see [§0 Current status](#0-current-status-2026-10-16) and [§14 Changelog](#14-changelog)).
 > **Product:** **Tabbycat** — a rewrite of the TuxGuitar desktop app onto **Electron + Nuxt 4 (Vue 3) + TypeScript**, replacing the Java/SWT/Cocoa UI.
 > **Audio:** a native **Rust sidecar** (`cpal` + `oxisynth`) — this *replaces* TuxGuitar's Java/Gervill sound engine (an evolution of the original "keep Java in a GraalVM sidecar" decision; see [D2](#d2--audio-native-rust-sidecar-)).
-> **Primary platform:** macOS (this fork). Windows/Linux deferred — see [Non-goals](#non-goals).
+> **Platforms:** macOS release configuration and Windows development/runtime. Windows packaging and Linux support remain open.
 
 ---
 
-## 0. Current status (2026-06-03)
+## 0. Current status (2026-10-16)
+
+The editor now supports notes, chords, deletion, rests, durations and dots inside existing measures, alongside tied-note fret changes, undo/redo, Save/Save As, and unsaved-change guards. Shortening fills space with rests; lengthening consumes rests without overlapping later notes or changing other voices. The `.tg` writer patches original v2 XML tokens, preserving unrelated data. Playback reloads edited MIDI before starting. Windows editing and native audio startup/playback are tested; audible fidelity, legacy-app round trips and release packaging remain separate gates. New-song/measure creation, cross-bar editing and full codec parity remain open.
+
+The custom **tab-only engine spike** is now the default view. Pure TS layout drives SVG, hit regions, empty-string cells, range selections and the audio playhead. It supports wrapped/continuous layout, zoom, spacing, stable editor IDs, and Alt-arrow move/duplicate commands. Column operations are deliberately bounded to complete single-voice measures without linked techniques; copies consume trailing rests. alphaTab remains available for comparison and unsupported engraving. Full beaming/techniques, multi-voice layout and playback autoscroll remain open. Accessibility follows as a dedicated pass once the rendering engine is done.
 
 What exists in the tree today. Legend: ✅ done · 🚧 in progress · ⬜ not started.
 
@@ -18,21 +22,21 @@ What exists in the tree today. Legend: ✅ done · 🚧 in progress · ⬜ not s
 | `app://` bundle protocol + CSP | ✅ | Prod served from `.output/public` via custom protocol; `build`→`nuxt generate`. |
 | Native `.tg` **read** in TS | ✅ | `shared/tg-reader.ts` (`parseTgFile`). One golden test (`china.tg`). |
 | Song model in TS | ✅ | `shared/model.ts` — `TGSong → … → TGNote`, precise-tick constants. |
-| Score/tab rendering | 🚧 | `ScoreViewer.vue` renders via alphaTab (`tgSongToScore`). `.tg` only; layout MVP. |
+| Score/tab rendering | 🚧 | Custom `tab-layout.ts` → SVG tab editor by default; alphaTab comparison retained. Wrapped/continuous views, zoom, spacing and nearby-system rendering. Full engraving remains open. |
 | **Rust audio sidecar** | ✅ | `sidecar/` — cpal + oxisynth; stdio JSON-RPC; `synth.load/play/stop/seek`; emits `ready`/`tick`/`playbackEnded`. |
 | MIDI generation | ✅ | `shared/midi-export.ts` (TS) — model → MIDI events sent to the sidecar. |
-| Playback + cursor sync (Spike 0a) | ✅ | Sidecar tick events → `usePlayback()` raf interpolation. In-process `PlaybackClock` fallback when sidecar absent. |
+| Playback progress | 🚧 | Sidecar tick events → `usePlayback()` interpolation → progress and custom-tab playhead. Playback autoscroll remains open. Missing audio reports an error. |
 | Transport | 🚧 | play / stop / seek only. No pause, loop, count-in, metronome, per-track mute/solo. |
-| Other-format import (GP*/GPX/PTB/TEF/MXML/MIDI) | ⬜ | In the Open dialog filter but return `null`. |
-| Native `.tg` **write** | ⬜ | No writer yet. |
-| Editing / command bus / undo | ⬜ | — |
+| Other-format import (GP*/GPX/PTB/TEF/MXML/MIDI) | ⬜ | Open and drag/drop accept `.tg` only; unsupported formats produce an error. |
+| Native `.tg` **write** | 🚧 | Source-preserving v2 note/rest/rhythm edits, atomic Save/Save As and round-trip tests. General model serialization remains open. |
+| Editing / command bus / undo | 🚧 | Per-string cursor, cell/column ranges, stable IDs, note/rhythm edits, Alt move/duplicate commands and atomic undo/redo. New songs/measures and cross-bar operations remain open. |
 | Exporters | ⬜ | — |
 | **TGX text format + AI** (new workstream) | 🚧 | Format spec + `.tg`→`.tgx` converter exist; AI features designed, not wired. See [§13](#13-tgx-text-format--ai-new-workstream). |
 | Packaging | 🚧 | `electron-builder` `.dmg`, hardened runtime configured; smoke test (`TG_SMOKE`). Signing/notarization unverified. |
 | Golden corpus harness | 🚧 | Single `.tg` fixture; full multi-format corpus from the Java build not captured yet. |
 | Legacy Java | ✅ relocated | Moved to `tuxguitar-java/`; reference only, not built by the Node toolchain. |
 
-**Net:** a usable **open-`.tg` → render → play** vertical slice is working end-to-end. Editing, writing, and the format long tail remain.
+**Net:** **open/drop `.tg` → enter notes/chords/rests → edit rhythm → undo/redo → save → reopen → play** is implemented inside existing measures and tested in Windows Electron. Native audio ticks reach the edited measure in the silent integration fixture. Song/measure creation and the format long tail remain.
 
 ---
 
@@ -43,7 +47,7 @@ This is a large undertaking: the legacy base is **~183K LOC of Java across 1,761
 **Approach: rewrite the UI to web, drive audio from a small native synth sidecar, and port the model/codecs to TypeScript incrementally — shipping something runnable early.**
 
 1. **Rewrite the UI** as an Electron app with a **Nuxt 4 / Vue 3** renderer (SPA mode). Delete the SWT/Cocoa stack. ✅
-2. **Render tab/score on alphaTab.** alphaTab ([MPL-2.0, free](https://alphatab.net)) provides notation rendering, music fonts/glyphs, and Guitar Pro import. ✅ (currently via alphaTab's high-level `Score` model — see [D1](#d1--rendering-on-alphatab-)).
+2. **Own the tab writing/rendering engine.** Custom TS geometry + SVG provides tab-only editing with control over appearance and interaction. alphaTab remains a comparison renderer — see [D1](#d1--custom-tab-rendering-and-alphatab-comparison).
 3. **Audio via a native Rust sidecar.** A standalone Rust binary (`cpal` + `oxisynth`) loads a SoundFont, synthesizes MIDI events generated in TS, outputs PCM itself, and streams tick/position events back for cursor sync. ✅
 4. **Port the model, editing, native `.tg` format, and exporters to TypeScript** incrementally, validated by **golden-file round-trip tests**. 🚧 (`.tg` read + model done; write/editing/exporters pending.)
 
@@ -62,7 +66,7 @@ This is a large undertaking: the legacy base is **~183K LOC of Java across 1,761
 
 ### Non-goals
 
-- **Cross-platform expansion.** macOS only for now. Electron *enables* Windows/Linux cheaply, but we won't invest in, test, or support them during this migration. (Revisit later — explicitly deferred, not refused.)
+- **Release-platform expansion.** Windows development and runtime are now exercised; Windows installers and Linux support remain deferred.
 - **Format / feature additions** beyond the new TGX format. Preserve the existing matrix and behavior. Parity first.
 
 ---
@@ -74,7 +78,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 | Subsystem | Where (under `tuxguitar-java/`) | ~LOC | Disposition |
 |---|---|---|---|
 | **Song model** (`TGSong→Track→Measure→Voice→Beat→Note`) | `common/TuxGuitar-lib/.../song/models` | part of 32K | **Ported to TS** (`shared/model.ts`). Editing source of truth. |
-| **Tab layout / render logic** (`graphics/control`, `TG*Painter`) | `common/TuxGuitar-lib` | part of 32K | **Replaced** by alphaTab rendering. Painters are a layout reference only. |
+| **Tab layout / render logic** (`graphics/control`, `TG*Painter`) | `common/TuxGuitar-lib` | part of 32K | **Replaced** by custom TS/SVG tab geometry; alphaTab comparison. Painters are a layout reference only. |
 | **GP3/4/5 codec** | `common/TuxGuitar-gtp` | 6.3K | Read via alphaTab import; **TS port later** if needed, golden-gated. |
 | **GPX (GP6) codec** | `common/TuxGuitar-gpx` | 3.3K | Same as above. |
 | **PowerTab (.ptb)** | `common/TuxGuitar-ptb` | 2.5K | **TS port later**; alphaTab where supported. |
@@ -100,7 +104,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 
 - **Thin legacy tests (~14 classes).** No behavioral safety net → build golden files *before* porting each codec ([§8](#8-testing--validation-strategy)).
 - **Binary codecs encode tacit knowledge.** GP/GPX/PTB/TEF carry years of vendor-quirk fixes. Rewrites must be validated against a large real-world corpus.
-- **Two song models in play.** TuxGuitar's model (TS, editing source of truth) vs. alphaTab's model (rendering). Currently bridged by an adapter (`tgSongToScore`) — see [D1](#d1--rendering-on-alphatab-).
+- **Two song models in play.** TuxGuitar's model (TS, editing source of truth) vs. alphaTab's model (rendering). Currently bridged by an adapter (`tgSongToScore`) — see [D1](#d1--custom-tab-rendering-and-alphatab-comparison).
 
 ---
 
@@ -125,7 +129,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 │    track strip, dialogs (TODO)         │  │  • Synthesizes scheduled MIDI   │
 │  • Song model + managers (TS) (TODO    │  │    events → PCM out (Core Audio │
 │    edit/undo)                          │  │    via cpal)                    │
-│  • alphaTab renderer → <canvas>        │◀─┤  • Emits tick/position events   │
+│  • Custom tab geometry → SVG          │◀─┤  • Emits tick/position events   │
 │  • usePlayback(): interpolated cursor  │  │    + playbackEnded over stdout  │
 └────────────────────────────────────────┘  └─────────────────────────────────┘
 ```
@@ -149,7 +153,7 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 | Shell | **Electron** | ✅ `electron-builder` for `.dmg`. |
 | Language | **TypeScript** | ✅ Shared types across main/preload/renderer. |
 | UI | **Nuxt 4 / Vue 3** (SPA) | ✅ `useState` + Tailwind v4 + Phosphor. Pinia / component lib / i18n deferred. |
-| Score/tab render + GP import | **alphaTab** (vendored, `packages/alphatab`) | ✅ rendering; GP import not wired yet. |
+| Tab render + comparison | **Custom TS/SVG**; alphaTab vendored in `packages/alphatab` | Tab-only spike; alphaTab comparison retained. GP import not wired yet. |
 | Audio | **Rust sidecar — cpal + oxisynth** | ✅ Replaces Gervill/Java. |
 | Sidecar runtime | **Native Rust binary (cargo)** | ✅ No JVM, no GraalVM. |
 | Build | **Vite** (via Nuxt) + `nuxt-electron` | ✅ |
@@ -160,10 +164,11 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 
 ## 5. Strategic decisions
 
-### D1 — Rendering on alphaTab ✅
+### D1 — Custom tab rendering and alphaTab comparison
 
-- We render tab/score with **alphaTab**. **Model boundary (resolved in practice to option b):** the TS port of TuxGuitar's model is the **editing source of truth**, and `tgSongToScore()` (`shared/tg-to-alphatab.ts`) **projects it onto alphaTab's `Score` model** for rendering (two models, one adapter). alphaTab's own player/cursor are disabled (`enablePlayer:false`) — it is a *renderer only*.
-- Option (a) — drawing directly from the TG model via alphaTab's low-level primitives (one model, no adapter) — remains a possible future move if the adapter drifts or limits editing feedback.
+- **Revised 2026-10-16:** the default editor now uses our own **tab-only geometry and SVG renderer**, reading the TS TG model directly. Layout, hit testing, caret/range bounds and playback geometry share one result. No alphaTab primitives or font are used on this path. Rendering and selection do not change musical timing.
+- **alphaTab is retained for comparison.** `tgSongToScore()` (`shared/tg-to-alphatab.ts`) projects the TG model onto alphaTab's `Score`; its player/cursor remain disabled. This preserves a reference while techniques, beaming, repeats and multi-voice tab are still being implemented. Standard staff notation is outside the current custom-engine scope.
+- Runtime column/note IDs belong to editor history, not the `.tg` schema. Validated commands produce model patches and source provenance; undo and source-preserving save use the same operations. Full accessibility is explicitly deferred to its own pass after rendering.
 - **License:** alphaTab is MPL-2.0 (weak, file-level copyleft). Using its public APIs is fine. alphaTab is **vendored as source** under `packages/alphatab` (pinned); if we modify its files, those files stay MPL — isolate and publish such changes. Prefer extension over modification.
 
 ### D2 — Audio: native Rust sidecar ✅
@@ -215,16 +220,21 @@ Grounded in the actual legacy tree, now relocated under **`tuxguitar-java/`** (`
 - **Exit:** open GP3–7, MusicXML, MIDI, `.tg` and render faithfully vs. golden screenshots.
 
 ### Phase 2 — Playback (Rust sidecar)  🚧
-- ✅ play / stop / seek with **cursor follow** driven by sidecar tick events.
+- ✅ play / stop with progress driven by sidecar ticks; seek protocol exists. Native Windows clock/start/stop checked with silent audio.
+- ✅ Audio-driven playhead in the custom tab renderer.
+- ⬜ Playback autoscroll and audible fidelity comparison.
 - ⬜ pause, count-in, loop, per-track mute/solo/volume, metronome.
 - **Exit:** transport complete; timing/mix matches the Java app on the corpus (within tolerance).
 
 ### Phase 3 — Native `.tg` read/write in TS  🚧
 - ✅ `TGStream` **reader** ported (`tg-reader.ts`).
-- ⬜ `TGStream` **writer**; remove any remaining gaps.
+- 🚧 Source-preserving v2 writer for note/rest/rhythm edits. General serialization and legacy versions remain open.
 - **Exit:** byte/canonical-model round-trip golden tests pass for the full `.tg` corpus incl. legacy versions.
 
-### Phase 4 — Editing core  ⬜
+### Phase 4 — Editing core  🚧
+- ✅ Notes/chords/rests, duration/dots within existing measures, string/beat navigation, ties, undo/redo and safe save/reopen.
+- ✅ Tab-only engine spike: shared layout/hit geometry, stable identities, cell/column/range selection, Alt-arrow column moves/copies, wrapped/continuous SVG and comparison view. Tests include 500 measures, zoomed input and source-preserving copies.
+- ⬜ New songs/measures, shifting notes across bars, tuplets/effects and broader command coverage.
 - Port the edit managers (`TGSongManager`/`TrackManager`/`MeasureManager`), the **command bus** (string IDs preserved), and **undo/redo**. Highest-traffic commands first.
 - **Exit:** create → edit → save `.tg` → reopen is lossless; top ~40 commands done.
 
@@ -263,7 +273,7 @@ The legacy suite (~14 classes) cannot anchor a rewrite. **Build the safety net f
 | Binary codec fidelity (GP/GPX/PTB/TEF) | High | alphaTab reads first; differential + golden tests on a large corpus before trusting any TS port. |
 | Thin existing tests | High | Capture the golden corpus from `tuxguitar-java/` before porting each codec. |
 | **Audio sync across the process boundary** | High→Med | **Spike 0a implemented** (tick events + renderer interpolation; audio stays in the sidecar, no raw PCM over IPC). Watch jitter under load / long playback. |
-| **alphaTab adapter drift** (TG model vs. alphaTab `Score`) | Medium | One explicit adapter (`tgSongToScore`), golden-tested; fall back to D1(a) low-level drawing if it limits editing. |
+| **alphaTab adapter drift** (TG model vs. alphaTab `Score`) | Medium | One explicit comparison adapter (`tgSongToScore`), golden-tested; default custom tab reads the TG model directly. |
 | `oxisynth` fidelity / SoundFont quality vs. Gervill | Medium | GeneralUser GS is broad-coverage; A/B against the Java mix; web-synth swap remains a fallback. |
 | Nuxt-in-Electron (unused SSR, routing/CSP, `generate`-only) | Medium | `ssr:false` + `nuxt generate` + `app://` + `nuxt-electron`; `build`→`generate` enforced. |
 | Shipping the native sidecar (build, soundfont size, startup) | Medium | Small Rust binary; supervise/restart from main; app degrades gracefully to silent when absent. |
@@ -290,7 +300,7 @@ The Java *core* remains the reference implementation throughout; the renderer/ed
 ## 11. Build skeleton (as built)
 
 - `electron/` — main + preload (TS), IPC contract (`shared/ipc.ts`), `SidecarManager`
-- `app/` — Nuxt 4 renderer (SPA): components, composables (`useSong`, `usePlayback`), alphaTab `ScoreViewer`
+- `app/` — Nuxt 4 renderer (SPA): components, composables (`useSong`, `usePlayback`), `ScoreViewer` with custom tab and alphaTab comparison
 - `shared/` — `model.ts`, `tg-reader.ts`, `midi-export.ts`, `tg-to-alphatab.ts`, `ipc.ts`
 - `sidecar/` — Rust audio sidecar (cpal + oxisynth); `build.sh` fetches the SoundFont + `cargo build --release`
 - `packages/alphatab/` — vendored alphaTab source
@@ -305,7 +315,7 @@ The Java *core* remains the reference implementation throughout; the renderer/ed
 
 | # | Question | Decision |
 |---|---|---|
-| 1 | alphaTab adoption | **Render on alphaTab** via a TG-model→`Score` adapter (D1b); custom low-level drawing (D1a) deferred. |
+| 1 | Rendering | **Custom tab-only TS/SVG engine**; alphaTab retained as a comparison view. |
 | 2 | Sidecar runtime | **Native Rust binary** (cargo). *(Was: GraalVM native-image of the Java core — superseded.)* |
 | 3 | UI framework | **Nuxt 4** (Vue 3, SPA). `useState` + Tailwind today; Pinia/component-lib/i18n deferred. |
 | 4 | Parity bar | **Full parity is the eventual goal.** v1 subset chosen later. |
@@ -317,7 +327,7 @@ The Java *core* remains the reference implementation throughout; the renderer/ed
 | 10 | Cross-platform | **macOS only for now**; revisit later. |
 
 ### Still open
-- **D1 model boundary:** stay on the alphaTab `Score` adapter (b) vs. move to low-level primitives (a).
+- **Custom tab engine:** full technique/beaming/repeat engraving, multi-voice layout, playback autoscroll and a dedicated accessibility pass. alphaTab retirement depends on those remaining needs.
 - **GP write:** port a writer vs. document as unsupported (Phase 5).
 - **State lib:** adopt Pinia or stay on `useState` as the store layer grows.
 - **v1 feature subset:** which of the 171 commands / 157 dialogs ship first.
@@ -337,6 +347,10 @@ Not in the original plan; added during the rewrite. See `docs/tgx-format.md` and
 ---
 
 ## 14. Changelog
+
+- **2026-10-16 (custom tab engine spike):** Added independent TS layout and SVG tab rendering, precise empty-cell hit/caret bounds, rectangular/column ranges, stable runtime IDs, command/keymap separation, single-measure column moves/copies and source-preserving XML provenance. Added zoom/spacing/wrapping, nearby-system rendering and an audio playhead. alphaTab remains a comparison renderer. Integration coverage includes native Alt keys, range deletion, atomic undo/save/reopen and 500-measure input/render observations. Full engraving and the dedicated accessibility pass remain open.
+- **2026-10-16 (note/rhythm milestone):** Added note/chord entry, deletion, rests, duration/dots and empty-string/rest navigation within existing measures. The shared reducer preserves bar length and other-voice timing; its patch stream updates original XML tokens. Extended Electron tests cover structural save/reopen, render concurrency and the native audio clock/Stop control with a silent fixture. New-song/measure creation, cross-bar operations and full format parity remain open.
+- **2026-10-16 (first editing slice):** Added existing-note fret changes, source-preserving `.tg` v2 saves, shared undo/redo, native command/close guards, drag/drop and playback from current edits. Added Windows dev/runtime handling, unit/round-trip tests, scoped type checking and Electron integration checks.
 
 - **2026-06-03 (revision):** Updated to implemented state.
   - **Audio engine switched Java/Gervill (GraalVM sidecar) → Rust (`cpal` + `oxisynth`).** Gervill, the Java player/sequencer, the GraalVM native-image, and the AudioUnit bridge are all dropped (D2). MIDI generation moved to TS (`shared/midi-export.ts`).

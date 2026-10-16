@@ -6,32 +6,38 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "icons": "node scripts/gen-icons.mjs",
-    "dev": "node scripts/dev-guard.mjs && node scripts/sidecar-guard.mjs && pnpm run icons && TMPDIR=/tmp nuxt dev",
+    "dev": "node scripts/dev.mjs",
     "generate": "pnpm run icons && nuxt generate",
     "build": "pnpm run generate",
     "preview": "pnpm run generate && electron .",
-    "smoke": "pnpm run generate && TG_SMOKE=1 electron .",
+    "smoke": "pnpm run generate && node scripts/smoke.mjs",
     "dist": "pnpm run generate && electron-builder --mac",
-    "sidecar:build": "bash sidecar/build.sh",
+    "sidecar:build": "node scripts/build-sidecar.mjs",
     "ai:tgx": "node scripts/ai/run.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "pnpm run generate && node test/e2e/editor.mjs && node test/e2e/rhythm.mjs && node test/e2e/tab-engine.mjs",
+    "typecheck": "nuxt prepare && vue-tsc --noEmit -p tsconfig.check.json",
     "build:packages": "pnpm --filter @coderline/alphatab build",
     "postinstall": "pnpm run build:packages && nuxt prepare"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.12"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.1",
     "@tailwindcss/vite": "^4.2.1",
+    "@types/node": "25.9.1",
     "electron": "^42.3.2",
     "electron-builder": "^26.8.1",
     "nuxt-electron": "^0.7.0",
+    "playwright": "1.62.1",
     "tailwindcss": "^4.2.1",
+    "typescript": "6.0.3",
     "vite-plugin-electron": "^1.0.0",
     "vite-plugin-electron-renderer": "^1.0.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "vue-tsc": "^3.3.13"
   },
   "dependencies": {
     "@coderline/alphatab": "workspace:*",

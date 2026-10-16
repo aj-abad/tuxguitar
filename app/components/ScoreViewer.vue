@@ -1,85 +1,36 @@
 <template>
-  <ScrollArea root-class="size-full">
-    <div class="max-w-4xl min-h-256 flex flex-col mx-auto my-4 bg-white rounded-xl shadow-lg p-8">
-      <div class="text-4xl mb-8">
-        {{ song?.name || "No song loaded" }}
-      </div>
-      <div class="flex-1 relative overflow-hidden" ref="container" />
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 bg-zinc-900 px-4 py-2 text-xs text-white/70">
+      <select :value="trackIndex" aria-label="Track" class="tab-control mr-auto max-w-48" :disabled="loading" @change="selectTrack(Number(($event.target as HTMLSelectElement).value))">
+        <option v-for="(track, index) in song?.tracks" :key="index" :value="index" :disabled="!track.strings.length">{{ track.name || `Track ${index + 1}` }}</option>
+      </select>
+      <select v-model="renderer" aria-label="Renderer" class="tab-control">
+        <option value="tabbycat">Tabbycat</option><option value="alphatab">alphaTab · comparison</option>
+      </select>
+      <template v-if="renderer === 'tabbycat'">
+        <select v-model="mode" aria-label="Tab layout" class="tab-control"><option value="wrap">Wrapped</option><option value="continuous">Continuous</option></select>
+        <select v-model.number="density" aria-label="Tab spacing" class="tab-control"><option :value=".85">Compact</option><option :value="1">Comfortable</option><option :value="1.25">Spacious</option></select>
+        <select v-model.number="zoom" aria-label="Tab zoom" class="tab-control"><option :value=".75">75%</option><option :value="1">100%</option><option :value="1.25">125%</option><option :value="1.5">150%</option></select>
+      </template>
     </div>
-  </ScrollArea>
+    <div class="min-h-0 min-w-0 flex-1">
+      <TabEditor v-if="renderer === 'tabbycat'" :track-index="trackIndex" :voice-index="voiceIndex" :mode :zoom :density />
+      <AlphaTabViewer v-else />
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import * as alphaTab from "@coderline/alphatab";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { tgSongToScore } from "~~/shared/tg-to-alphatab";
-
-const { song } = useSong();
-
-const container = ref<HTMLElement | null>(null);
-let api: alphaTab.AlphaTabApi | null = null;
-
-onMounted(async () => {
-  if (!container.value) return;
-  console.log(
-    "[ScoreViewer] mounting, container size:",
-    container.value.offsetWidth,
-    "x",
-    container.value.offsetHeight,
-  );
-
-  await Promise.allSettled([
-    new FontFace("alphaTab", "url(/font/Leipzig.otf)").load().then((f) => document.fonts.add(f)),
-  ]);
-
-  api = new alphaTab.AlphaTabApi(container.value, {
-    core: {
-      logLevel: alphaTab.LogLevel.Info,
-      smuflFontSources: new Map([[alphaTab.FontFileFormat.OpenType, "/font/Leipzig.otf"]]),
-    },
-    display: {
-      layoutMode: alphaTab.LayoutMode.Page,
-      scale: 1,
-      padding: [16, 16],
-      resources: {
-        staffLineColor: "rgba(0,0,0,0.25)", // the string/staff lines
-      },
-    },
-    player: {
-      enablePlayer: false,
-      enableCursor: false,
-    },
-  });
-
-  api.error.on((e) => {
-    console.error("[alphaTab] error:", e.message, (e as any).inner);
-  });
-
-  api.postRenderFinished.on(() => {
-    console.log("[alphaTab] render finished");
-  });
-
-  if (song.value) renderSong();
-});
-
-onBeforeUnmount(() => {
-  api?.destroy();
-  api = null;
-});
-
-watch(song, (v) => {
-  if (v) renderSong();
-});
-
-function renderSong() {
-  if (!api || !song.value) return;
-  try {
-    console.log("[ScoreViewer] converting song:", song.value.tracks.length, "tracks");
-    const score = tgSongToScore(song.value);
-    console.log("[ScoreViewer] score built, calling renderScore");
-    api.renderScore(score);
-  } catch (e) {
-    console.error("[ScoreViewer] conversion failed:", e);
-  }
-}
+import { computed, ref } from 'vue';
+const { song, selection, loading, selectTrack } = useSong();
+const renderer = useState<'tabbycat' | 'alphatab'>('score:renderer', () => 'tabbycat');
+const mode = ref<'wrap' | 'continuous'>('wrap');
+const zoom = ref(1), density = ref(1);
+const trackIndex = computed(() => selection.value?.track ?? 0);
+const voiceIndex = computed(() => selection.value?.voice ?? 0);
 </script>
+
+<style scoped>
+.tab-control { padding: 5px 8px; border-radius: 5px; border: 1px solid #ffffff12; background: #ffffff08; color-scheme: dark; outline: none; }
+.tab-control:focus { border-color: #38bdf8; }
+</style>

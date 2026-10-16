@@ -1,20 +1,23 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell } from "electron";
-import { existsSync, readFileSync } from "node:fs";
-import { extname, join, normalize } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, extname, isAbsolute, join, normalize } from "node:path";
 import {
   IpcChannels,
   type TickEvent,
+  type DocumentCommand,
+  type DocumentEdits,
+  type DocumentMenuState,
+  type OpenDocument,
 } from "../shared/ipc";
 import {
   PRECISE_FACTOR,
   PRECISE_STARTING_POINT,
-  WHOLE_PRECISE_DURATION,
-  type TGMeasureHeader,
   type TGSong,
 } from "../shared/model";
-import { exportMidi, TPQ } from "../shared/midi-export";
-import { parseTgFile, validateFirstBeatPreciseStart } from "../shared/tg-reader";
 import { SidecarManager } from "./sidecar";
+import { SongDocument } from "./documents";
+import { PlaybackSession } from "./playback";
+import { isSupportedSongFile, SONG_FILE_EXTENSIONS, SONG_FILE_FORMATS } from "../shared/file-formats";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 const isDev = !!DEV_URL;
@@ -87,124 +90,61 @@ function serveBundle(pathname: string): Response {
   });
 }
 
-// ---- PlaybackClock ----------------------------------------------------------
-// In-process tick emitter for Spike 0a and until the real GraalVM sidecar is
-// built. Emits one tick per beat (quarter note) at the song's tempo.
-// When the real sidecar is ready, replace this with the sidecar's tick stream.
-
-class PlaybackClock {
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private beatsEmitted = 0;
-  private totalBeats = 0;
-  private bpm = 120;
-  private ticksPerBeat = WHOLE_PRECISE_DURATION / 4;
-  private measureStarts: Array<{ number: number; preciseTick: number }> = [];
-
-  start(song: TGSong, win: BrowserWindow): void {
-    this.stop();
-
-    this.bpm = song.measureHeaders[0]?.tempo ?? 120;
-    this.beatsEmitted = 0;
-
-    // Total quarter-note beats in the song
-    this.totalBeats = song.measureHeaders.reduce(
-      (sum, h) => sum + h.timeSignature.numerator * (4 / h.timeSignature.denominator),
-      0,
-    );
-
-    this.measureStarts = song.measureHeaders.map((h: TGMeasureHeader) => ({
-      number: h.number,
-      preciseTick: h.start * PRECISE_FACTOR,
-    }));
-
-    const beatMs = 60000 / this.bpm;
-
-    const emit = () => {
-      if (this.beatsEmitted >= this.totalBeats) {
-        this.stop();
-        if (!win.isDestroyed()) {
-          win.webContents.send(IpcChannels.sidecarPlaybackEnded);
-        }
-        return;
-      }
-
-      const tick: TickEvent = {
-        tick: PRECISE_STARTING_POINT + this.beatsEmitted * this.ticksPerBeat,
-        measure: this.measureAtTick(PRECISE_STARTING_POINT + this.beatsEmitted * this.ticksPerBeat),
-        bpm: this.bpm,
-      };
-      if (!win.isDestroyed()) {
-        win.webContents.send(IpcChannels.sidecarTick, tick);
-      }
-      this.beatsEmitted++;
-    };
-
-    emit(); // first tick immediately
-    this.timer = setInterval(emit, beatMs);
-  }
-
-  private measureAtTick(preciseTick: number): number {
-    let m = 1;
-    for (const ms of this.measureStarts) {
-      if (preciseTick >= ms.preciseTick) m = ms.number;
-      else break;
-    }
-    return m;
-  }
-
-  stop(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    this.beatsEmitted = 0;
-  }
-
-  get running(): boolean {
-    return this.timer !== null;
-  }
-}
-
 // ---- app state -------------------------------------------------------------
 
 const sidecar = new SidecarManager();
-const clock = new PlaybackClock();
 let lastSong: TGSong | null = null;
+let activeDocument: SongDocument | null = null;
+const playback = new PlaybackSession(sidecar, song => { lastSong = song; });
+let allowClose = false;
 // Guards against stacking native open dialogs: while one is open, concurrent
 // requests (menu + button + repeated triggers) coalesce onto the in-flight one.
-let openDialogPromise: Promise<TGSong | null> | null = null;
+let openDialogPromise: Promise<OpenDocument | null> | null = null;
+let saveDialogPromise: Promise<{ fileName: string } | null> | null = null;
 
-async function runOpenFileDialog(): Promise<TGSong | null> {
-  const { canceled, filePaths } = await dialog.showOpenDialog({
-    filters: [
-      { name: "TuxGuitar Files", extensions: ["tg"] },
-      {
-        name: "All Supported",
-        extensions: ["tg", "gp3", "gp4", "gp5", "gp", "gpx", "ptb", "tef", "mxml", "xml", "mid", "midi"],
-      },
-    ],
+async function runOpenFileDialog(): Promise<OpenDocument | null> {
+  const { canceled, filePaths } = await dialog.showOpenDialog(getWin()!, {
+    filters: [{ name: "TuxGuitar Files", extensions: SONG_FILE_EXTENSIONS }],
     properties: ["openFile"],
   });
   if (canceled || filePaths.length === 0) return null;
-  const filePath = filePaths[0];
+  return openDocument(filePaths[0]);
+}
 
-  if (filePath.endsWith(".tg")) {
-    try {
-      const bytes = readFileSync(filePath);
-      const song = parseTgFile(new Uint8Array(bytes));
-      validateFirstBeatPreciseStart(song);
-      lastSong = song;
-      if (sidecar.status === "ready") {
-        const events = exportMidi(song);
-        sidecar.load(events, TPQ).catch(e => console.error("[main] sidecar load failed:", e));
-      }
-      return song;
-    } catch (err) {
-      console.error(`[main] failed to parse .tg: ${String(err)}`);
-      return null;
-    }
+async function openDocument(filePath: string): Promise<OpenDocument> {
+  if (typeof filePath !== "string" || !isAbsolute(filePath)) throw new Error("Choose a file from your computer.");
+  if (!isSupportedSongFile(filePath)) throw new Error(`Unsupported file type. Supported format: ${SONG_FILE_FORMATS}.`);
+  if (!statSync(filePath).isFile()) throw new Error("Folders cannot be opened as songs.");
+  const document = new SongDocument(filePath);
+  await stopPlayback();
+  activeDocument = document;
+  lastSong = document.song;
+  return document.snapshot();
+}
+
+function requireDocument(request: DocumentEdits): SongDocument {
+  if (!activeDocument || request?.id !== activeDocument.id) throw new Error("This document is no longer open.");
+  return activeDocument;
+}
+
+async function stopPlayback(): Promise<void> {
+  await playback.stop();
+}
+
+async function runSave(request: DocumentEdits, saveAs: boolean) {
+  const document = requireDocument(request);
+  let path = document.path;
+  if (saveAs) {
+    const result = await dialog.showSaveDialog(getWin()!, {
+      defaultPath: path,
+      filters: [{ name: "TuxGuitar Files", extensions: ["tg"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    path = result.filePath;
+    if (extname(path).toLowerCase() !== ".tg") throw new Error("Use a filename ending in .tg.");
   }
-  return null;
+  requireDocument(request); // the same document must still be open after the dialog
+  return document.save(path, request.edits);
 }
 
 function measureAtPrecise(preciseTick: number, song: TGSong | null): number {
@@ -221,6 +161,10 @@ function getWin(): BrowserWindow | undefined {
   return BrowserWindow.getAllWindows()[0];
 }
 
+function requestCommand(command: DocumentCommand): void {
+  getWin()?.webContents.send(IpcChannels.documentCommand, command);
+}
+
 // ---- native menu -----------------------------------------------------------
 
 function buildAppMenu(): void {
@@ -228,7 +172,7 @@ function buildAppMenu(): void {
 
   const template: Electron.MenuItemConstructorOptions[] = [
     // macOS app menu
-    {
+    ...(process.platform === "darwin" ? [{
       label: app.name,
       submenu: [
         { role: "about" },
@@ -241,7 +185,7 @@ function buildAppMenu(): void {
         { type: "separator" },
         { role: "quit" },
       ],
-    },
+    } as Electron.MenuItemConstructorOptions] : []),
 
     // File
     {
@@ -251,19 +195,16 @@ function buildAppMenu(): void {
         {
           label: "Open…",
           accelerator: "CmdOrCtrl+O",
-          click: () => {
-            const win = getWin();
-            if (win) win.webContents.send(IpcChannels.menuTriggerOpen);
-          },
+          click: () => requestCommand("open"),
         },
         { label: "Open Recent", submenu: [{ label: "(empty)", ...stub }] },
         { label: "Open Example", submenu: [{ label: "(empty)", ...stub }] },
         { label: "Back to Tabs", accelerator: "CmdOrCtrl+B", ...stub },
         { type: "separator" },
-        { label: "Close", accelerator: "CmdOrCtrl+W", ...stub },
+        { label: "Close", accelerator: "CmdOrCtrl+W", click: () => getWin()?.close() },
         { label: "Close All", accelerator: "Shift+CmdOrCtrl+W", ...stub },
-        { label: "Save", accelerator: "CmdOrCtrl+S", ...stub },
-        { label: "Save As…", accelerator: "Shift+CmdOrCtrl+S", ...stub },
+        { id: "save", label: "Save", accelerator: "CmdOrCtrl+S", enabled: false, click: () => requestCommand("save") },
+        { id: "saveAs", label: "Save As…", accelerator: "Shift+CmdOrCtrl+S", enabled: false, click: () => requestCommand("saveAs") },
         { label: "Save As Template…", ...stub },
         { label: "Open Containing Folder", ...stub },
         { type: "separator" },
@@ -282,8 +223,8 @@ function buildAppMenu(): void {
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        { id: "undo", label: "Undo Edit", accelerator: "CmdOrCtrl+Z", enabled: false, click: () => requestCommand("undo") },
+        { id: "redo", label: "Redo Edit", accelerator: "CmdOrCtrl+Shift+Z", enabled: false, click: () => requestCommand("redo") },
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },
@@ -299,7 +240,7 @@ function buildAppMenu(): void {
         {
           label: "Force Reload",
           accelerator: "CmdOrCtrl+R",
-          click: () => getWin()?.webContents.reloadIgnoringCache(),
+          click: () => requestCommand("reload"),
         },
         ...(isDev
           ? [
@@ -344,10 +285,9 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
-    titleBarStyle: "hidden",
-    transparent: true,
-    backgroundColor: "#00000000",
-    show: process.env.TG_SMOKE !== "1",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hidden" as const, transparent: true } : {}),
+    backgroundColor: process.platform === "darwin" ? "#00000000" : "#18181b",
+    show: process.env.TG_SMOKE !== "1" && process.env.TG_HEADLESS !== "1",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -356,7 +296,19 @@ function createWindow() {
     },
   });
 
-  win.setVibrancy("hud");
+  if (process.platform === "darwin") win.setVibrancy("hud");
+  win.on("close", event => {
+    if (!allowClose && activeDocument) {
+      event.preventDefault();
+      requestCommand("close");
+    }
+  });
+  win.on("closed", () => {
+    activeDocument = null;
+    lastSong = null;
+    allowClose = false;
+    void stopPlayback().catch(console.error);
+  });
 
   win.webContents.on("console-message", (e: any, level?: any, message?: any) => {
     const text = e && typeof e === "object" && "message" in e ? e.message : message;
@@ -373,17 +325,24 @@ function createWindow() {
     console.log(`[main] loaded ${win.webContents.getURL()}`);
     if (process.env.TG_SMOKE === "1") {
       try {
-        await new Promise((r) => setTimeout(r, 2000));
-        const info = await win.webContents.executeJavaScript(
-          `({ rootHtmlLen: (document.getElementById('__nuxt')?.innerHTML || '').length,` +
-            ` bodyText: (document.body?.innerText || '').slice(0, 160),` +
-            ` hasTg: typeof window.tg })`,
-        );
+        let info: { rootHtmlLen: number; bodyText: string; hasTg: string } | undefined;
+        // First dev boot may still be optimizing dependencies after the page
+        // loads. Check actual UI readiness rather than accepting a blank page.
+        for (let attempt = 0; attempt < 100; attempt++) {
+          info = await win.webContents.executeJavaScript(
+            `({ rootHtmlLen: (document.getElementById('__nuxt')?.innerHTML || '').length,` +
+              ` bodyText: (document.body?.innerText || '').slice(0, 160),` +
+              ` hasTg: typeof window.tg })`,
+          );
+          if (info && info.rootHtmlLen > 500 && info.bodyText.includes("Tabbycat")) break;
+          await new Promise(r => setTimeout(r, 300));
+        }
         console.log(`[smoke] ${JSON.stringify(info)}`);
+        app.exit(info && info.rootHtmlLen > 500 && info.hasTg === "object" ? 0 : 1);
       } catch (err) {
         console.error(`[smoke] eval failed: ${String(err)}`);
+        app.exit(1);
       }
-      app.exit(0);
     }
   });
 
@@ -392,16 +351,8 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  // When sidecar finishes initializing and a song is already open, send its MIDI events.
-  sidecar.on("status", (s: string) => {
-    if (s === "ready" && lastSong) {
-      const events = exportMidi(lastSong);
-      sidecar.load(events, TPQ).catch(e => console.error("[main] sidecar load on ready:", e));
-    }
-  });
-
   // Forward sidecar tick events — convert qtick (0-based QT ticks) → precise ticks
-  sidecar.on("tick", ({ qtick, bpm }: { qtick: number; bpm: number }) => {
+  const onTick = ({ qtick, bpm }: { qtick: number; bpm: number }) => {
     if (win.isDestroyed()) return;
     const preciseTick = PRECISE_STARTING_POINT + qtick * PRECISE_FACTOR;
     const tickEvent: TickEvent = {
@@ -410,14 +361,19 @@ function createWindow() {
       bpm,
     };
     win.webContents.send(IpcChannels.sidecarTick, tickEvent);
-  });
-  sidecar.on("playbackEnded", () => {
+  };
+  const onEnded = () => {
     if (!win.isDestroyed()) win.webContents.send(IpcChannels.sidecarPlaybackEnded);
+  };
+  sidecar.on("tick", onTick);
+  sidecar.on("playbackEnded", onEnded);
+  win.on("closed", () => {
+    sidecar.off("tick", onTick);
+    sidecar.off("playbackEnded", onEnded);
   });
 
   if (isDev) {
     void win.loadURL(DEV_URL!);
-    if (process.env.TG_SMOKE !== "1") win.webContents.openDevTools({ mode: "detach" });
   } else {
     void win.loadURL(`${APP_ORIGIN}/`);
   }
@@ -452,24 +408,53 @@ void app.whenReady().then(() => {
     return openDialogPromise;
   });
 
+  ipcMain.handle(IpcChannels.fileOpenDropped, (_event, filePath: string) => {
+    if (openDialogPromise || saveDialogPromise) throw new Error("Finish the current file operation first.");
+    openDialogPromise = openDocument(filePath).finally(() => { openDialogPromise = null; });
+    return openDialogPromise;
+  });
+
+  ipcMain.handle(IpcChannels.fileSave, (_e, request: DocumentEdits, saveAs: boolean) => {
+    if (saveDialogPromise) return saveDialogPromise;
+    saveDialogPromise = runSave(request, saveAs === true).finally(() => { saveDialogPromise = null; });
+    return saveDialogPromise;
+  });
+  ipcMain.handle(IpcChannels.fileConfirmChanges, async () => {
+    const { response } = await dialog.showMessageBox(getWin()!, {
+      type: "question", buttons: ["Save", "Discard", "Cancel"], defaultId: 0, cancelId: 2,
+      message: "Save your changes?", detail: "Your changes will be lost if you discard them.",
+    });
+    return ["save", "discard", "cancel"][response] ?? "cancel";
+  });
+  ipcMain.on(IpcChannels.documentMenuState, (_e, state: DocumentMenuState) => {
+    const menu = Menu.getApplicationMenu();
+    for (const [id, enabled] of Object.entries({ save: state.hasSong, saveAs: state.hasSong,
+      undo: state.canUndo, redo: state.canRedo })) {
+      const item = menu?.getMenuItemById(id);
+      if (item) item.enabled = enabled && !state.busy;
+    }
+    const win = getWin();
+    win?.setTitle(`${activeDocument ? basename(activeDocument.path) : "Tabbycat"}${state.dirty ? " •" : ""} — Tabbycat`);
+    if (process.platform === "darwin") win?.setDocumentEdited(state.dirty);
+  });
+  ipcMain.on(IpcChannels.windowClose, () => { allowClose = true; getWin()?.close(); });
+  ipcMain.on(IpcChannels.windowReload, () => {
+    void stopPlayback().catch(console.error).finally(() => {
+      activeDocument = null;
+      lastSong = null;
+      getWin()?.webContents.reload();
+    });
+  });
+
   ipcMain.handle(IpcChannels.sidecarStatus, () => sidecar.status);
 
   // play — always restarts from the beginning
-  ipcMain.handle(IpcChannels.sidecarPlay, (_e) => {
-    const win = getWin();
-    if (!win) return;
-    clock.stop();
-    if (sidecar.status === "ready") {
-      void sidecar.play(0).catch(console.error);
-    } else if (lastSong) {
-      clock.start(lastSong, win);
-    }
+  ipcMain.handle(IpcChannels.sidecarPlay, async (_e, request: DocumentEdits) => {
+    const song = requireDocument(request).editedSong(request.edits);
+    await playback.play(song);
   });
 
-  ipcMain.handle(IpcChannels.sidecarStop, () => {
-    clock.stop();
-    if (sidecar.status === "ready") void sidecar.stop().catch(() => {});
-  });
+  ipcMain.handle(IpcChannels.sidecarStop, stopPlayback);
 
   ipcMain.handle(IpcChannels.sidecarSeek, (_e, tick: number) => {
     if (sidecar.status === "ready") void sidecar.seek(tick).catch(() => {});
@@ -499,6 +484,5 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
-  clock.stop();
   sidecar.kill();
 });

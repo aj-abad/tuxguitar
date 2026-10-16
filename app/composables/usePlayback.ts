@@ -17,14 +17,19 @@ let currentBpm = 120;
 let songEndPrecise = PRECISE_STARTING_POINT;
 let rafId: ReturnType<typeof requestAnimationFrame> | null = null;
 let listenersBound = false;
+let playRequest = 0;
+let unsubscribe: Array<() => void> = [];
 
 export function usePlayback() {
-  const { song } = useSong();
+  const { song, snapshot, loading } = useSong();
 
   // Shared reactive state — same refs for every component (keyed singletons).
   const isPlaying = useState("pb:isPlaying", () => false);
+  const isStarting = useState("pb:isStarting", () => false);
+  const playbackError = useState<string | null>("pb:error", () => null);
   const currentMeasure = useState("pb:currentMeasure", () => 1);
   const playbackProgress = useState("pb:progress", () => 0);
+  const playbackTick = useState("pb:tick", () => PRECISE_STARTING_POINT);
 
   function measureFromPrecise(tick: number): number {
     const headers = song.value?.measureHeaders ?? [];
@@ -51,6 +56,7 @@ export function usePlayback() {
       // ticks per ms = (whole note ticks) * bpm / (4 beats * 60000 ms/min)
       const ticksPerMs = (WHOLE_PRECISE_DURATION * currentBpm) / (4 * 60_000);
       const interpolated = lastTickPrecise + elapsed * ticksPerMs;
+      playbackTick.value = interpolated;
 
       currentMeasure.value = measureFromPrecise(interpolated);
       const span = songEndPrecise - PRECISE_STARTING_POINT;
@@ -69,22 +75,25 @@ export function usePlayback() {
     if (listenersBound || typeof window === "undefined" || !window.tg) return;
     listenersBound = true;
 
-    window.tg.onTick((event) => {
+    unsubscribe.push(window.tg.onTick((event) => {
       lastTickPrecise = event.tick;
       lastTickMs = performance.now();
       currentBpm = event.bpm;
-    });
+    }));
 
-    window.tg.onPlaybackEnded(() => {
+    unsubscribe.push(window.tg.onPlaybackEnded(() => {
       isPlaying.value = false;
       playbackProgress.value = 1;
       stopRaf();
-    });
+    }));
   }
 
-  function play() {
-    if (typeof window === "undefined" || !window.tg || !song.value) return;
+  async function play() {
+    if (typeof window === "undefined" || !window.tg || !song.value || loading.value || isStarting.value) return;
     ensureListeners();
+    const request = ++playRequest;
+    isStarting.value = true;
+    playbackError.value = null;
 
     // Song end = last tick at which a note still sounds, from the same event
     // stream the sidecar plays. This tracks audible playback — it ignores
@@ -109,22 +118,42 @@ export function usePlayback() {
     lastTickMs = performance.now();
     currentBpm = song.value.measureHeaders[0]?.tempo ?? 120;
 
-    isPlaying.value = true;
-    currentMeasure.value = 1;
-    playbackProgress.value = 0;
-
-    startRaf();
-    void window.tg.play();
+    try {
+      await window.tg.play(snapshot());
+      if (request !== playRequest) return;
+      lastTickMs = performance.now();
+      isPlaying.value = true;
+      currentMeasure.value = 1;
+      playbackProgress.value = 0;
+      playbackTick.value = PRECISE_STARTING_POINT;
+      startRaf();
+    } catch (e) {
+      if (request !== playRequest) return;
+      isPlaying.value = false;
+      stopRaf();
+      playbackError.value = String(e).replace(/^Error: Error invoking remote method '[^']+': Error: /, "");
+    } finally {
+      if (request === playRequest) isStarting.value = false;
+    }
   }
 
   function stop() {
     if (typeof window === "undefined" || !window.tg) return;
+    playRequest++;
+    isStarting.value = false;
     isPlaying.value = false;
     playbackProgress.value = 0;
     currentMeasure.value = 1;
     stopRaf();
-    void window.tg.stop();
+    void window.tg.stop().catch(e => { playbackError.value = String(e); });
   }
 
-  return { isPlaying, currentMeasure, playbackProgress, play, stop };
+  function dispose() {
+    stopRaf();
+    unsubscribe.forEach(fn => fn());
+    unsubscribe = [];
+    listenersBound = false;
+  }
+
+  return { isPlaying, isStarting, playbackError, currentMeasure, playbackProgress, playbackTick, play, stop, dispose };
 }

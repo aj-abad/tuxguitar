@@ -1,217 +1,108 @@
 <template>
-  <aside
-    class="absolute left-4 top-4 z-20 flex max-h-[calc(100%-2rem)] w-64 flex-col overflow-hidden rounded-2xl bg-zinc-800 text-white/90 shadow-2xl border border-white/10"
-    style="-webkit-app-region: no-drag">
-    <!-- Header -->
-    <header
-      class="flex shrink-0 items-center gap-2 border-b border-transparent px-3 py-2.5 transition-colors"
-      :class="open && 'border-white/10'">
-      <PhSlidersHorizontal class="size-4 opacity-70" />
-      <span class="text-xs font-medium tracking-wide">Edit Tools</span>
-      <span class="grow" />
-      <button
-        class="rounded p-0.5 opacity-50 transition hover:bg-white/10 hover:opacity-100"
-        :title="open ? 'Collapse' : 'Expand'"
-        @click="open = !open">
-        <PhCaretUp class="size-3.5 transition-transform" :class="!open && 'rotate-180'" />
-      </button>
-    </header>
-
-    <!-- Body -->
-    <AnimatePresence :initial="false">
-      <motion.div
-        v-if="open"
-        key="body"
-        class="overflow-hidden"
-        :initial="{ height: 0, opacity: 0 }"
-        :animate="{ height: 'auto', opacity: 1 }"
-        :exit="{ height: 0, opacity: 0 }"
-        :transition="{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }">
-        <ScrollArea root-class="h-auto" viewport-class="h-auto max-h-[75vh] p-3">
-          <div class="flex flex-col gap-4">
-      <!-- Duration -->
-      <section>
-        <h3 :class="labelClass">Duration</h3>
-        <div class="grid grid-cols-4 gap-1.5">
-          <button
-            v-for="d in durations"
-            :key="d.id"
-            :class="[btnClass, selectedDuration === d.id && activeClass]"
-            :title="d.label"
-            @click="selectedDuration = d.id">
-            <span class="relative text-xl leading-none">{{ d.glyph }}</span>
-            <span class="absolute bottom-0.5 right-1 text-[9px] tabular-nums opacity-50">{{ d.id }}</span>
-          </button>
-          <button :class="btnClass" title="Dotted note">
-            <PhDot class="size-5" weight="fill" />
-          </button>
-          <button :class="btnClass" title="Triplet / tuplet">
-            <span class="text-sm font-semibold">3</span>
-          </button>
+  <aside class="max-h-[45vh] shrink-0 overflow-y-auto border-t border-white/10 bg-zinc-900/90 p-4 text-white md:max-h-none md:w-64 md:border-l md:border-t-0">
+    <h2 class="mb-4 text-sm font-medium">Edit tablature</h2>
+    <template v-if="selection && track && selectedVoice">
+      <p class="mb-1 truncate text-sm text-white/80">{{ track.name }}</p>
+      <p class="mb-4 text-xs text-white/50" aria-live="polite">
+        Measure {{ selection.measure + 1 }} · Beat {{ beatNumber }} · Voice {{ selection.voice + 1 }}
+      </p>
+      <label for="note-string" class="mb-2 block text-xs text-white/70">String</label>
+      <select id="note-string" :value="selection.string" :disabled="loading" class="editor-input mb-4" @change="chooseString">
+        <option v-for="string in track.strings" :key="string.number" :value="string.number">{{ string.number }} · {{ pitchName(string.value) }}</option>
+      </select>
+      <label for="note-fret" class="mb-2 block text-xs text-white/70">Fret</label>
+      <input
+        id="note-fret"
+        :value="fretInput"
+        @input="fretInput = ($event.target as HTMLInputElement).value"
+        type="number" inputmode="numeric" min="0" :max="track.maxFret"
+        :placeholder="selectedVoice.notes.length ? 'Empty string' : 'Rest'"
+        :disabled="loading" class="editor-input"
+        @change="applyFret"
+        @keydown.enter="($event.target as HTMLInputElement).blur()"
+        @keydown.esc="fretInput = selectedNote ? String(selectedNote.value) : ''" />
+      <p class="mt-2 text-xs text-white/45">0–{{ track.maxFret }} · Type a fret to add a note</p>
+      <p v-if="selectedNote?.tiedNote" class="mt-3 text-xs text-white/60">Fret edits apply to the whole tied note.</p>
+      <div class="mt-3 flex gap-2">
+        <button class="editor-button flex-1 text-xs" :disabled="loading || !hasSelectedNotes" @click="removeNote">Delete notes</button>
+        <button class="editor-button flex-1 text-xs" :disabled="loading || !selectedColumnsHaveNotes" aria-label="Make beat a rest" @click="makeRest">Rest</button>
+      </div>
+      <div class="my-5 border-t border-white/10" />
+      <label for="note-duration" class="mb-2 block text-xs text-white/70">Duration</label>
+      <select id="note-duration" :value="selectedVoice.duration.value" :disabled="loading" class="editor-input mb-4" @change="chooseDuration">
+        <option v-for="duration in durations" :key="duration.value" :value="duration.value">{{ duration.label }}</option>
+      </select>
+      <label for="note-dots" class="mb-2 block text-xs text-white/70">Dots</label>
+      <select id="note-dots" :value="dots" :disabled="loading" class="editor-input" @change="chooseDots">
+        <option :value="0">None</option><option :value="1">Dotted</option><option :value="2">Double dotted</option>
+      </select>
+      <p v-if="selectedVoice.duration.division && selectedVoice.duration.division.enters !== selectedVoice.duration.division.times" class="mt-2 text-xs text-white/50">
+        Tuplet {{ selectedVoice.duration.division.enters }}:{{ selectedVoice.duration.division.times }}
+      </p>
+      <div class="mt-5 flex gap-2">
+        <button class="editor-button flex-1" :disabled="loading" aria-label="Previous beat" @click="navigate('ArrowLeft')"><PhArrowLeft class="size-4" /></button>
+        <button class="editor-button flex-1" :disabled="loading" aria-label="Next beat" @click="navigate('ArrowRight')"><PhArrowRight class="size-4" /></button>
+      </div>
+      <div class="mt-5 border-t border-white/10 pt-4">
+        <p class="mb-2 text-xs text-white/70">Columns</p>
+        <div class="grid grid-cols-2 gap-2">
+          <button v-for="command in columnCommands" :key="command.id" class="editor-button text-xs" :disabled="loading" :aria-label="command.label"
+            :title="`${command.label} · ${command.shortcut}`" @click="runTabCommand(command.id)">{{ command.id.includes('copy') ? 'Duplicate' : 'Move' }} {{ command.id.endsWith('Left') || command.id.endsWith('left') ? '←' : '→' }}</button>
         </div>
-      </section>
-
-      <!-- Effects -->
-      <section>
-        <h3 :class="labelClass">Effects</h3>
-        <div class="grid grid-cols-4 gap-1.5">
-          <button
-            v-for="e in effects"
-            :key="e.label"
-            :class="btnClass"
-            :title="e.label">
-            <component :is="e.icon" v-if="e.icon" class="size-4" />
-            <span v-else :class="(e.text?.length ?? 0) > 1 ? 'text-[10px] font-semibold' : 'text-base leading-none'">{{ e.text }}</span>
-          </button>
-        </div>
-      </section>
-
-      <!-- Dynamics -->
-      <section>
-        <h3 :class="labelClass">Dynamics</h3>
-        <div class="grid grid-cols-4 gap-1.5">
-          <button
-            v-for="dy in dynamics"
-            :key="dy"
-            :class="[btnClass, selectedDynamic === dy && activeClass]"
-            :title="`Dynamic: ${dy}`"
-            @click="selectedDynamic = dy">
-            <span class="font-serif text-xs italic">{{ dy }}</span>
-          </button>
-        </div>
-      </section>
-
-      <!-- Insert -->
-      <section>
-        <h3 :class="labelClass">Insert</h3>
-        <div class="grid grid-cols-4 gap-1.5">
-          <button
-            v-for="i in inserts"
-            :key="i.label"
-            :class="btnClass"
-            :title="i.label">
-            <component :is="i.icon" v-if="i.icon" class="size-4" />
-            <span v-else :class="(i.text?.length ?? 0) > 1 ? 'text-[10px] font-semibold' : 'text-lg leading-none'">{{ i.text ?? i.glyph }}</span>
-          </button>
-        </div>
-      </section>
-
-      <!-- Edit -->
-      <section>
-        <h3 :class="labelClass">Edit</h3>
-        <div class="grid grid-cols-4 gap-1.5">
-          <button
-            v-for="ed in edits"
-            :key="ed.label"
-            :class="btnClass"
-            :title="ed.label">
-            <component :is="ed.icon" v-if="ed.icon" class="size-4" />
-            <span v-else class="text-base leading-none">{{ ed.glyph }}</span>
-          </button>
-        </div>
-      </section>
-          </div>
-        </ScrollArea>
-      </motion.div>
-    </AnimatePresence>
+      </div>
+      <p class="mt-5 text-xs leading-relaxed text-white/50">← → columns · ↑ ↓ strings<br>Shift + arrows select<br>Alt + ← → move columns<br>Alt + Shift + ← → duplicate<br>+ − duration · . dotted<br>Delete notes · R rest</p>
+    </template>
+    <p v-else class="text-sm text-white/60">Select a note or rest in the score.</p>
   </aside>
 </template>
 
 <script setup lang="ts">
-import {
-  PhArrowBendUpRight,
-  PhArrowDown,
-  PhArrowLineLeft,
-  PhArrowLineRight,
-  PhArrowUp,
-  PhBell,
-  PhCaretUp,
-  PhDiamond,
-  PhDot,
-  PhGreaterThan,
-  PhHandTap,
-  PhKey,
-  PhLineSegment,
-  PhMetronome,
-  PhMinus,
-  PhMusicNotes,
-  PhPlus,
-  PhSlidersHorizontal,
-  PhSpeakerSimpleHigh,
-  PhTextT,
-  PhTrash,
-  PhVibrate,
-  PhWaveSine,
-  PhWaveTriangle,
-} from "@phosphor-icons/vue";
-import { AnimatePresence, motion } from "motion-v";
-import { ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { PhArrowLeft, PhArrowRight } from "@phosphor-icons/vue";
+import { TAB_COMMANDS } from "~~/shared/tab-commands";
 
-// Shared Tailwind class strings
-const labelClass =
-  "mb-1.5 text-[10px] font-medium uppercase tracking-wider text-white/40";
-const btnClass =
-  "relative flex size-9 items-center justify-center rounded-lg text-white/80 transition hover:bg-white/10 hover:text-white active:bg-white/15";
-const activeClass = "bg-white/15 text-white ring-1 ring-white/20";
-
-// Purely visual local selection (not wired to the model yet)
-const open = ref(true);
-const selectedDuration = ref("4");
-const selectedDynamic = ref("mf");
-
+const { song, selection, selectedNote, selectedVoice, hasSelectedNotes, selectedColumnsHaveNotes, loading, changeFret, navigate,
+  selectCursor, changeDuration, removeNote, makeRest, runTabCommand } = useSong();
+const columnCommands = TAB_COMMANDS.filter(command => command.id.startsWith('column.'));
+const track = computed(() => song.value && selection.value ? song.value.tracks[selection.value.track] : null);
+const beatNumber = computed(() => selection.value && track.value ? track.value.measures[selection.value.measure]!.beats
+  .slice(0, selection.value.beat + 1).filter(beat => beat.voices[selection.value!.voice] && !beat.voices[selection.value!.voice]!.empty).length : 0);
+const dots = computed(() => selectedVoice.value?.duration.doubleDotted ? 2 : selectedVoice.value?.duration.dotted ? 1 : 0);
 const durations = [
-  { id: "1", glyph: "𝅝", label: "Whole note" },
-  { id: "2", glyph: "𝅗𝅥", label: "Half note" },
-  { id: "4", glyph: "♩", label: "Quarter note" },
-  { id: "8", glyph: "♪", label: "Eighth note" },
-  { id: "16", glyph: "𝅘𝅥𝅯", label: "Sixteenth note" },
-  { id: "32", glyph: "𝅘𝅥𝅰", label: "Thirty-second note" },
-  { id: "64", glyph: "𝅘𝅥𝅱", label: "Sixty-fourth note" },
+  { value: 1, label: "Whole" }, { value: 2, label: "Half" }, { value: 4, label: "Quarter" },
+  { value: 8, label: "Eighth" }, { value: 16, label: "16th" }, { value: 32, label: "32nd" }, { value: 64, label: "64th" },
 ];
-
-const effects = [
-  { label: "Dead note", text: "✕" },
-  { label: "Ghost note", text: "( )" },
-  { label: "Accentuated", icon: PhGreaterThan },
-  { label: "Heavy accentuated", text: "^" },
-  { label: "Vibrato", icon: PhWaveSine },
-  { label: "Bend", icon: PhArrowBendUpRight },
-  { label: "Slide", icon: PhLineSegment },
-  { label: "Hammer-on / Pull-off", text: "⌒" },
-  { label: "Palm mute", text: "P.M." },
-  { label: "Let ring", icon: PhBell },
-  { label: "Harmonic", icon: PhDiamond },
-  { label: "Tapping", icon: PhHandTap },
-  { label: "Staccato", icon: PhDot },
-  { label: "Trill", text: "tr" },
-  { label: "Tremolo bar", icon: PhWaveTriangle },
-  { label: "Tremolo picking", icon: PhVibrate },
-  { label: "Fade in", icon: PhSpeakerSimpleHigh },
-  { label: "Grace note", text: "gr" },
-];
-
-const dynamics = ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff"];
-
-const inserts = [
-  { label: "Chord", icon: PhMusicNotes },
-  { label: "Text", icon: PhTextT },
-  { label: "Tempo", icon: PhMetronome },
-  { label: "Time signature", text: "4/4" },
-  { label: "Key signature", icon: PhKey },
-  { label: "Clef", glyph: "𝄞" },
-  { label: "Repeat open", glyph: "𝄆" },
-  { label: "Repeat close", glyph: "𝄇" },
-];
-
-const edits = [
-  { label: "Move beat left", icon: PhArrowLineLeft },
-  { label: "Move beat right", icon: PhArrowLineRight },
-  { label: "Shift note up", icon: PhArrowUp },
-  { label: "Shift note down", icon: PhArrowDown },
-  { label: "Semitone up", icon: PhPlus },
-  { label: "Semitone down", icon: PhMinus },
-  { label: "Tied note", glyph: "⌒" },
-  { label: "Insert rest", glyph: "𝄽" },
-  { label: "Delete note", icon: PhTrash },
-];
+const fretInput = ref("");
+watch([selectedNote, selection], ([note]) => { fretInput.value = note ? String(note.value) : ""; }, { immediate: true });
+function applyFret() {
+  const value = fretInput.value.trim();
+  if (value) changeFret(Number(value));
+  fretInput.value = selectedNote.value ? String(selectedNote.value.value) : "";
+}
+function chooseString(event: Event) {
+  if (selection.value) selectCursor({ ...selection.value, string: Number((event.target as HTMLSelectElement).value) });
+}
+function chooseDuration(event: Event) {
+  const input = event.target as HTMLSelectElement;
+  if (selectedVoice.value) changeDuration({ ...selectedVoice.value.duration, value: Number(input.value) });
+  input.value = String(selectedVoice.value?.duration.value);
+}
+function chooseDots(event: Event) {
+  const input = event.target as HTMLSelectElement;
+  const count = Number(input.value);
+  if (selectedVoice.value) changeDuration({ ...selectedVoice.value.duration, dotted: count === 1, doubleDotted: count === 2 });
+  input.value = String(dots.value);
+}
+function pitchName(pitch: number) {
+  return ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"][pitch % 12] + String(Math.floor(pitch / 12) - 1);
+}
 </script>
+
+<style scoped>
+.editor-input {
+  width: 100%; border: 1px solid rgb(255 255 255 / 0.15); border-radius: 0.5rem;
+  background: #27272a; padding: 0.5rem 0.75rem; font-size: 0.875rem; outline: none;
+}
+.editor-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 1px #38bdf8; }
+.editor-input:disabled { opacity: 0.5; }
+</style>
