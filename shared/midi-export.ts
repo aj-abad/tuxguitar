@@ -1,316 +1,98 @@
-import {
-  QUARTER_TIME,
-  PRECISE_STARTING_POINT,
-  STROKE_DOWN,
-  TRIPLET_FEEL_EIGHTH,
-  TRIPLET_FEEL_SIXTEENTH,
-  type TGChannel,
-  type TGDuration,
-  type TGNote,
-  type TGSong,
-  type TGTrack,
-  type TGVoice,
-} from "./model";
+import { QUARTER_TIME, type TGChannel, type TGSong } from './model';
+import { soundingNotes, type SoundingNote } from './midi-articulations';
 
-export const TPQ = QUARTER_TIME; // 960
-
-// PRECISE_FACTOR = WHOLE_PRECISE_DURATION / (QUARTER_TIME * 4) = 3003
-const PRECISE_FACTOR = 3003;
-
-// ---- public types ----------------------------------------------------------
-
+export const TPQ = QUARTER_TIME;
 export type MidiEvent =
-  | { type: "tempo";      tick: number; usq: number }
-  | { type: "program";    tick: number; ch: number; program: number }
-  | { type: "control";    tick: number; ch: number; cc: number; value: number }
-  | { type: "pitch_bend"; tick: number; ch: number; value: number }
-  | { type: "note_on";    tick: number; ch: number; note: number; vel: number }
-  | { type: "note_off";   tick: number; ch: number; note: number; vel: number };
+  | { type: 'tempo'; tick: number; usq: number }
+  | { type: 'program'; tick: number; ch: number; program: number }
+  | { type: 'control'; tick: number; ch: number; cc: number; value: number }
+  | { type: 'pitch_bend'; tick: number; ch: number; value: number }
+  | { type: 'note_on'; tick: number; ch: number; note: number; vel: number }
+  | { type: 'note_off'; tick: number; ch: number; note: number; vel: number };
 
-// ---- helpers ---------------------------------------------------------------
+const clamp = (value: number, high = 127) => Math.max(0, Math.min(high, Math.round(value)));
+const preferredChannel = (channel: TGChannel) => channel.id < 9 ? channel.id : Math.min(channel.id + 1, 15);
+interface ChannelState { ch: number; source?: TGChannel; bent: boolean; active: SoundingNote[] }
 
-const VEL_INCREMENT = 16;
-const MIN_VEL = 15;
-const PM_MS = 60;   // palm mute target duration in ms
-const DEAD_MS = 30; // dead note target duration in ms
-
-function clamp(v: number, lo = 0, hi = 127): number {
-  return v < lo ? lo : v > hi ? hi : v;
+function setup(out: MidiEvent[], source: TGChannel, ch: number, tick: number, range: number, recycle: boolean) {
+  const control = (cc: number, value: number) => out.push({ type: 'control', tick, ch, cc, value: clamp(value) });
+  // Silence release tails before changing a recycled channel's tuning/program.
+  if (recycle) control(120, 0);
+  control(0, source.bank);
+  control(7, source.volume); control(10, source.balance);
+  control(91, source.reverb); control(93, source.chorus);
+  out.push({ type: 'program', tick, ch, program: clamp(source.program) });
+  if (ch !== 9) {
+    // RPN 0: explicitly set pitch-bend sensitivity in semitones and cents.
+    control(101, 0); control(100, 0); control(6, range); control(38, 0);
+    control(101, 127); control(100, 127);
+    out.push({ type: 'pitch_bend', tick, ch, value: 8192 });
+  }
 }
 
-function durationTicks(d: TGDuration): number {
-  let t = (4 * TPQ) / d.value;
-  if (d.dotted) t += t / 2;
-  else if (d.doubleDotted) t += t / 2 + t / 4;
-  if (d.division) t = (t * d.division.times) / d.division.enters;
-  return Math.round(t);
+function pitchEvents(out: MidiEvent[], note: SoundingNote, ch: number, range: number, step: number) {
+  let lastValue = -1;
+  const point = (tick: number, semitones: number) => {
+    const value = clamp(8192 + semitones * 8192 / range, 16383);
+    if (value !== lastValue) out.push({ type: 'pitch_bend', tick, ch, value });
+    lastValue = value;
+  };
+  note.pitchPoints.forEach((to, index, points) => {
+    const from = points[index - 1];
+    if (from && from.semitones !== to.semitones) {
+      const length = to.tick - from.tick;
+      // Also bound pitch steps to five cents for fast or wide slides.
+      const count = Math.min(length, Math.max(Math.ceil(length / step), Math.ceil(Math.abs(to.semitones - from.semitones) * 20)));
+      for (let index = 1; index < count; index++) {
+        const tick = Math.round(from.tick + length * index / count);
+        point(tick, from.semitones + (to.semitones - from.semitones) * (tick - from.tick) / (to.tick - from.tick));
+      }
+    }
+    point(to.tick, to.semitones);
+  });
 }
-
-// ms duration → QT ticks at current bpm, capped at maxTicks
-function staticTicks(ms: number, bpm: number, maxTicks: number): number {
-  return Math.min(Math.round((ms * TPQ * bpm) / 60_000), maxTicks);
-}
-
-// Convert beat.preciseStart (WHOLE_PRECISE_DURATION units) to 0-based QT ticks.
-// First beat of song = tick 0.
-function preciseToQT(precise: number): number {
-  return Math.round((precise - PRECISE_STARTING_POINT) / PRECISE_FACTOR);
-}
-
-// Map TGChannel.id (0-indexed GM channel) to actual MIDI channel, skipping 9
-// unless it IS the percussion channel.
-function midiCh(ch: TGChannel): number {
-  if (ch.id === 9) return 9; // GM drums
-  return ch.id < 9 ? ch.id : Math.min(ch.id + 1, 15);
-}
-
-// ---- main export -----------------------------------------------------------
 
 export function exportMidi(song: TGSong): MidiEvent[] {
   const out: MidiEvent[] = [];
-  const push = (e: MidiEvent) => out.push(e);
-
-  const channelMap = new Map<number, TGChannel>(song.channels.map(c => [c.id, c]));
-
-  // Channel setup at tick 0
-  for (const ch of song.channels) {
-    const mc = midiCh(ch);
-    push({ type: "control", tick: 0, ch: mc, cc: 7,  value: clamp(ch.volume) });
-    push({ type: "control", tick: 0, ch: mc, cc: 10, value: clamp(ch.balance) });
-    push({ type: "control", tick: 0, ch: mc, cc: 91, value: clamp(ch.reverb) });
-    push({ type: "control", tick: 0, ch: mc, cc: 93, value: clamp(ch.chorus) });
-    push({ type: "program", tick: 0, ch: mc, program: clamp(ch.program) });
+  let previousTempo = -1;
+  for (const header of song.measureHeaders) {
+    const usq = Math.round(60_000_000 / header.tempo);
+    if (usq !== previousTempo) out.push({ type: 'tempo', tick: header.start - TPQ, usq });
+    previousTempo = usq;
   }
-
-  // Tempo events (0-normalized: header.start - QUARTER_TIME)
-  let prevUsq = -1;
-  for (const h of song.measureHeaders) {
-    const usq = Math.round(60_000_000 / h.tempo);
-    if (usq !== prevUsq) {
-      push({ type: "tempo", tick: h.start - QUARTER_TIME, usq });
-      prevUsq = usq;
+  const channels: ChannelState[] = Array.from({ length: 16 }, (_, ch) => ({ ch, bent: false, active: [] }));
+  // At most 5 ms between pitch updates at the slowest tempo (one tick minimum).
+  const minTempo = song.measureHeaders.reduce((bpm, header) => Math.min(bpm, header.tempo), 120);
+  const step = Math.max(1, Math.floor(TPQ * minTempo / 12_000));
+  const notes = soundingNotes(song).sort((a, b) => a.start - b.start || Number(!!a.pitchPoints.length) - Number(!!b.pitchPoints.length));
+  for (const note of notes) {
+    for (const channel of channels) channel.active = channel.active.filter(active => active.end > note.start);
+    const bent = !!note.pitchPoints.length;
+    const melodic = channels.filter(channel => channel.ch !== 9);
+    // Plain chord notes share a channel; changing pitches and overlapping unisons
+    // need independent channels until note-off.
+    let channel = note.channel.id === 9 ? channels[9] : !bent ? melodic.find(channel =>
+      channel.source === note.channel && !channel.bent && !channel.active.some(active => active.pitch === note.pitch)) : undefined;
+    channel ??= melodic.find(channel => !channel.active.length && channel.ch === preferredChannel(note.channel))
+      ?? melodic.find(channel => !channel.active.length && !channel.source)
+      ?? melodic.find(channel => !channel.active.length);
+    if (!channel) throw new Error('Playback needs more than 15 independent melodic channels at once. Reduce overlapping bends or slides, or mute a track.');
+    const range = Math.max(12, ...note.pitchPoints.map(point => Math.ceil(Math.abs(point.semitones))));
+    if (channel.source !== note.channel || channel.bent || bent) {
+      setup(out, note.channel, channel.ch, note.start, range, !!channel.source && !channel.active.length);
     }
+    channel.source = note.channel; channel.bent = bent; channel.active.push(note);
+    pitchEvents(out, note, channel.ch, range, step);
+    out.push({ type: 'note_on', tick: note.start, ch: channel.ch, note: note.pitch, vel: note.velocity });
+    out.push({ type: 'note_off', tick: note.end, ch: channel.ch, note: note.pitch, vel: 0 });
   }
-
-  // Notes per track
-  for (const track of song.tracks) {
-    const ch = channelMap.get(track.channelId);
-    if (!ch) continue;
-    const mc = midiCh(ch);
-
-    for (let mi = 0; mi < track.measures.length; mi++) {
-      const measure = track.measures[mi];
-      const header = song.measureHeaders[mi];
-      if (!measure || !header) continue;
-
-      const stroke = new Array<number>(track.strings.length + 1).fill(0);
-      let prevBeat: (typeof measure.beats)[number] | null = null;
-
-      for (let bi = 0; bi < measure.beats.length; bi++) {
-        const beat = measure.beats[bi];
-        if (!beat) continue;
-        updateStroke(beat, prevBeat, stroke, track.strings.length);
-
-        for (let vi = 0; vi < beat.voices.length; vi++) {
-          const voice = beat.voices[vi];
-          if (!voice || voice.empty || voice.notes.length === 0) continue;
-
-          const beatTick = preciseToQT(beat.preciseStart);
-          const voiceDur = durationTicks(voice.duration);
-          const { start: tStart, duration: tDur } = applyTripletFeel(
-            voice, bi, beatTick, voiceDur, header.tripletFeel,
-          );
-
-          for (const note of voice.notes) {
-            if (note.tiedNote) continue;
-
-            const pitch = clamp(track.offset + note.value + track.strings[note.string - 1]!.value);
-            const delay = stroke[note.string] ?? 0;
-            const noteStart = tStart + delay;
-            const baseDur = Math.max(1, tDur - delay);
-
-            let dur = realDuration(note, vi, baseDur, track, mi, bi, song);
-            dur = applyDurEffects(note, header.tempo, dur);
-
-            const vel = realVelocity(note, track, mi, bi, song);
-
-            push({ type: "note_on",  tick: noteStart,        ch: mc, note: pitch, vel });
-            push({ type: "note_off", tick: noteStart + Math.max(1, dur), ch: mc, note: pitch, vel: 0 });
-          }
-        }
-        prevBeat = beat;
-      }
-    }
-  }
-
-  // Sort: by tick, note_off before note_on at same tick
-  out.sort((a, b) => {
-    if (a.tick !== b.tick) return a.tick - b.tick;
-    const rank = (e: MidiEvent) => e.type === "note_off" ? 0 : e.type === "note_on" ? 2 : 1;
-    return rank(a) - rank(b);
-  });
-
+  // Preserve channel update order: old endpoint, reset, new pre-bend, attack.
+  const rank = (event: MidiEvent) => event.type === 'note_off' ? 0 : event.type === 'note_on' ? 2 : 1;
+  out.sort((a, b) => a.tick - b.tick || rank(a) - rank(b));
   return out;
 }
 
-/**
- * Last tick (0-based QT) at which any note still sounds — the audible end of
- * the song. Derived from the same event stream the sidecar plays (so it honours
- * let-ring/tied durations and ignores trailing empty measures), keeping a
- * progress bar in sync with what's actually heard. Returns 0 for a silent song.
- */
+/** Duration planning does not allocate channels or generate dense pitch events. */
 export function songEndTick(song: TGSong): number {
-  let max = 0;
-  for (const e of exportMidi(song)) {
-    if (e.type === "note_off" && e.tick > max) max = e.tick;
-  }
-  return max;
-}
-
-// ---- duration effects ------------------------------------------------------
-
-function applyDurEffects(note: TGNote, bpm: number, dur: number): number {
-  if (note.effect.deadNote) return staticTicks(DEAD_MS, bpm, dur);
-  if (note.effect.palmMute) return staticTicks(PM_MS,   bpm, dur);
-  if (note.effect.staccato) return Math.max(1, Math.round(dur * 0.5));
-  return dur;
-}
-
-// ---- real duration (tied notes + let ring) ---------------------------------
-
-function realDuration(
-  note: TGNote,
-  vIdx: number,
-  baseDur: number,
-  track: TGTrack,
-  mi: number,
-  bi: number,
-  song: TGSong,
-): number {
-  const isLetRing = note.effect.letRing;
-  if (!isLetRing) return baseDur;
-
-  let dur = baseDur;
-  let m = mi, b = bi + 1;
-
-  outer:
-  while (m < track.measures.length) {
-    const measure = track.measures[m]!;
-    while (b < measure.beats.length) {
-      const nextBeat = measure.beats[b]!;
-      const nextVoice: TGVoice | undefined = nextBeat.voices[vIdx];
-      if (nextVoice && !nextVoice.empty && nextVoice.notes.length > 0) {
-        const match = nextVoice.notes.find(n => n.string === note.string);
-        if (match) {
-          if (match.tiedNote) {
-            dur += durationTicks(nextVoice.duration);
-            if (!match.effect.letRing) break outer;
-          } else if (match.effect.letRing) {
-            dur += durationTicks(nextVoice.duration);
-          } else {
-            break outer;
-          }
-        } else if (!isLetRing) {
-          break outer;
-        }
-      } else if (nextVoice && !nextVoice.empty) {
-        break outer; // rest voice
-      }
-      b++;
-    }
-    m++; b = 0;
-  }
-
-  return dur;
-}
-
-// ---- velocity --------------------------------------------------------------
-
-function realVelocity(
-  note: TGNote,
-  track: TGTrack,
-  mi: number,
-  bi: number,
-  song: TGSong,
-): number {
-  let vel = note.velocity;
-
-  if (note.effect.hammer) {
-    const prev = prevNoteOnString(note, track, mi, bi);
-    if (prev?.effect.hammer) vel = Math.max(MIN_VEL, vel - 25);
-  }
-
-  if      (note.effect.ghostNote)             vel = Math.max(MIN_VEL, vel - VEL_INCREMENT);
-  else if (note.effect.accentuatedNote)       vel = Math.min(127, vel + VEL_INCREMENT);
-  else if (note.effect.heavyAccentuatedNote)  vel = Math.min(127, vel + VEL_INCREMENT * 2);
-
-  return clamp(vel);
-}
-
-function prevNoteOnString(note: TGNote, track: TGTrack, mi: number, bi: number): TGNote | null {
-  for (let m = mi; m >= 0; m--) {
-    const measure = track.measures[m]!;
-    const endB = m === mi ? bi - 1 : measure.beats.length - 1;
-    for (let b = endB; b >= 0; b--) {
-      for (const voice of measure.beats[b]!.voices) {
-        const n = voice.notes.find(n => n.string === note.string);
-        if (n) return n;
-      }
-    }
-  }
-  return null;
-}
-
-// ---- stroke ----------------------------------------------------------------
-
-function updateStroke(
-  beat: TGSong["tracks"][0]["measures"][0]["beats"][0],
-  prev: typeof beat | null,
-  stroke: number[],
-  stringCount: number,
-): void {
-  const dir = beat.stroke?.direction ?? 0;
-  const prevDir = prev?.stroke?.direction ?? 0;
-  if (!prev || !(dir === 0 && prevDir === 0)) {
-    if (dir === 0) {
-      stroke.fill(0);
-    } else {
-      let usedMask = 0, count = 0;
-      for (const v of beat.voices) {
-        for (const n of v.notes) {
-          if (!n.tiedNote) { usedMask |= 1 << (n.string - 1); count++; }
-        }
-      }
-      if (count > 0) {
-        const sv = beat.stroke?.value ?? 0;
-        const inc = sv > 0 ? Math.round(TPQ / sv) : 0;
-        let move = 0;
-        for (let i = 0; i < stringCount; i++) {
-          const idx = dir === STROKE_DOWN ? stringCount - 1 - i : i;
-          if (usedMask & (1 << idx)) { stroke[idx + 1] = move; move += inc; }
-        }
-      }
-    }
-  }
-}
-
-// ---- triplet feel ----------------------------------------------------------
-
-function applyTripletFeel(
-  voice: TGVoice,
-  _bIdx: number,
-  start: number,
-  dur: number,
-  feel: number,
-): { start: number; duration: number } {
-  if (feel === TRIPLET_FEEL_EIGHTH && voice.duration.value === 8) {
-    const tripDur = durationTicks({ value: 8, dotted: false, doubleDotted: false, division: { enters: 3, times: 2 } });
-    if (start % TPQ === 0)       return { start, duration: tripDur * 2 };
-    if (start % (TPQ / 2) === 0) return { start: start - dur + tripDur * 2, duration: tripDur };
-  } else if (feel === TRIPLET_FEEL_SIXTEENTH && voice.duration.value === 16) {
-    const tripDur = durationTicks({ value: 16, dotted: false, doubleDotted: false, division: { enters: 3, times: 2 } });
-    if (start % (TPQ / 2) === 0) return { start, duration: tripDur * 2 };
-    if (start % (TPQ / 4) === 0) return { start: start - dur + tripDur * 2, duration: tripDur };
-  }
-  return { start, duration: dur };
+  return soundingNotes(song).reduce((end, note) => Math.max(end, note.end), 0);
 }

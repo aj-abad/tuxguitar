@@ -1,5 +1,5 @@
 <template>
-  <div class="h-screen flex flex-col select-none">
+  <div class="app-chrome h-screen flex flex-col select-none">
     <div
       v-if="draggingFile"
       data-testid="file-drop-overlay"

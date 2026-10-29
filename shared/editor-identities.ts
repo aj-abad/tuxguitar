@@ -14,7 +14,8 @@ export function createIdentities(song: TGSong): EditorIdentities {
 
 /** Update index-to-identity maps alongside the reducer's validated patches. */
 export function patchIdentities(before: EditorIdentities, patch: ScorePatch): EditorIdentities {
-  if (["note.fret", "note.untie", "voice.duration", "voice.empty"].includes(patch.kind)) return before;
+  if (patch.kind === 'header.repeat' || patch.kind === 'track.layout') return before;
+  if (["note.fret", "note.untie", "note.tie", "note.effect", "note.bend", "voice.duration", "voice.empty"].includes(patch.kind)) return before;
   const ids = { next: before.next, columns: { ...before.columns }, notes: { ...before.notes } };
   const a = patch.address;
   const prefix = `${a.track}:${a.measure}:`;

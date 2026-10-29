@@ -17,7 +17,7 @@
     "ai:tgx": "node scripts/ai/run.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "pnpm run generate && node test/e2e/editor.mjs && node test/e2e/rhythm.mjs && node test/e2e/tab-engine.mjs",
+    "test:e2e": "pnpm run generate && node test/e2e/editor.mjs && node test/e2e/rhythm.mjs && node test/e2e/tab-engine.mjs && node test/e2e/engraving.mjs && node test/e2e/repeats.mjs && node test/e2e/repeat-writing.mjs && node test/e2e/technique-writing.mjs && node test/e2e/articulation-playback.mjs && node test/e2e/tab-design.mjs",
     "typecheck": "nuxt prepare && vue-tsc --noEmit -p tsconfig.check.json",
     "build:packages": "pnpm --filter @coderline/alphatab build",
     "postinstall": "pnpm run build:packages && nuxt prepare"

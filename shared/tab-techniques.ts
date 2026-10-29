@@ -85,8 +85,10 @@ function connectionSegments(layout: TabLayout, link: TabConnection): void {
   for (let index = sourceSystem.index; index <= targetSystem.index; index++) {
     const system = layout.systems[index];
     const fromPrevious = index !== sourceSystem.index, toNext = index !== targetSystem.index;
-    const x1 = fromPrevious ? 66 : link.source.column.x + noteWidth(link.source.item.note, layout.fretSize) / 2 + 2;
-    const x2 = toNext ? system.width - 4 : link.target.column.x - noteWidth(link.target.item.note, layout.fretSize) / 2 - 2;
+    // Anchor beside the painted digits, not the wider paper masks behind them.
+    const inset = (note: TGNote) => noteText(note).length * layout.fretSize * .62 / 2 + 3;
+    const x1 = fromPrevious ? system.measures[0].x + 4 : link.source.column.x + inset(link.source.item.note);
+    const x2 = toNext ? system.width - 4 : link.target.column.x - inset(link.target.item.note);
     const y = system.strings.find(s => s.number === string)!.y;
     const label = link.kind === 'hammer-on' ? 'H' : link.kind === 'pull-off' ? 'P' : '';
     const paths: TabTechnique['paths'] = [];
@@ -96,7 +98,7 @@ function connectionSegments(layout: TabLayout, link: TabConnection): void {
     } else {
       const direction = link.kind === 'tie' ? 1 : -1;
       const y1 = y + direction * (fromPrevious ? 10 : 2), y2 = y + direction * (toNext ? 10 : 2);
-      const height = direction * (link.kind === 'tie' ? 15 : 19);
+      const height = direction * Math.min(layout.stringSpacing * .55, (x2 - x1) * .35 + 5);
       paths.push({ kind: 'curve', d: `M ${x1} ${y1} C ${x1 + (x2 - x1) * .25} ${y + height} ${x2 - (x2 - x1) * .25} ${y + height} ${x2} ${y2}` });
     }
     const anchor = fromPrevious ? link.target : link.source;
@@ -106,7 +108,7 @@ function connectionSegments(layout: TabLayout, link: TabConnection): void {
       continuation: fromPrevious ? toNext ? 'middle' : 'end' : toNext ? 'start' : 'none',
       cursor: { ...anchor.column.address, string }, paths,
       bounds: { x: x1, y: y - (label ? 27 : 7), w: Math.max(0, x2 - x1), h: label ? 29 : link.kind === 'tie' ? 24 : 14 },
-      labels: label ? [{ x: (x1 + x2) / 2, y: y - 15, text: label }] : [] });
+      labels: label ? [{ x: (x1 + x2) / 2, y: system.top - 12, text: label }] : [] });
   }
 }
 
@@ -114,8 +116,12 @@ function bendGlyph(layout: TabLayout, column: TabColumn, item: TabNote, system: 
   const profile = bendProfile(item.note.effect.bend!);
   if (!profile) return false;
   if (!profile.start && profile.segments.every(s => !s.from.value && !s.to.value)) return true;
-  const yAt = (value: number) => item.y - (value ? 10 + value * 3 : 2);
-  let x = column.x + noteWidth(item.note, layout.fretSize) / 2 + 4;
+  const amount = Math.max(profile.start, ...profile.segments.map(s => s.to.value));
+  // Fit the gesture between evenly spaced strings; the label carries its pitch.
+  const rise = Math.max(10, Math.min(22, layout.stringSpacing - 10));
+  const yAt = (value: number) => item.y - (value ? 6 + value / amount * (rise - 6) : 2);
+  // Keep pre-bend labels past every fret in a chord, including wider tied frets.
+  let x = column.x + Math.max(...column.notes.map(n => noteWidth(n.note, layout.fretSize))) / 2 + 10;
   const endX = column.left + column.width - 10, startX = x;
   const paths: TabTechnique['paths'] = [], labels: TabTechnique['labels'] = [];
   const arrow = (x: number, y: number, direction: number) => {
@@ -138,7 +144,6 @@ function bendGlyph(layout: TabLayout, column: TabColumn, item: TabNote, system: 
     } else if (segment.to.value) paths.push({ kind: 'hold', d: `M ${x} ${y1} L ${nextX} ${y2}` });
     x = nextX;
   }
-  const amount = Math.max(profile.start, ...profile.segments.map(s => s.to.value));
   system.techniques.push({ id: `${item.id}:bend`, kind: 'bend', sourceId: item.id,
     title: `${profile.start ? 'Pre-bend' : 'Bend'} ${bendAmount(amount)}${profile.segments.some(s => s.direction < 0) ? ' and release' : ''}`,
     continuation: 'none', cursor: { ...column.address, string: item.note.string },

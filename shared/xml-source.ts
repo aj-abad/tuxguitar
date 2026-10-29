@@ -28,6 +28,10 @@ export class SourceElement {
     return new SourceElement(this.name, this.opening, this.closing, this.content.map(item => typeof item === "string" ? item : item.clone()));
   }
   replaceElements(name: string, elements: SourceElement[]): void {
+    if (elements.length && /\/>$/.test(this.opening)) {
+      this.opening = this.opening.replace(/\/>$/, ">");
+      this.closing = `</${this.name}>`;
+    }
     let index = 0;
     this.content = this.content.flatMap(item => item instanceof SourceElement && item.name === name
       ? index < elements.length ? [elements[index++]] : [] : [item]);

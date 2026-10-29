@@ -81,7 +81,7 @@ export interface TGMeasureHeader {
   tempoBase: number; // duration value (4 = quarter, 8 = eighth, etc.)
   tempoDotted: boolean;
   repeatOpen: boolean;
-  repeatClose: number; // 0 = not closing; >0 = close after N times
+  repeatClose: number; // 0 = not closing; >0 = N additional passes (1 = play twice)
   repeatAlternative: number; // bitmask of alternative numbers
   marker?: { title: string; color: { r: number; g: number; b: number } };
   tripletFeel: number;
@@ -100,7 +100,11 @@ export interface TGTrack {
   strings: TGString[];
   lyrics: { from: number; text: string };
   measures: TGMeasure[];
+  /** Explicit rows of bar widths in unzoomed document units. Absent = automatic. */
+  tabLayout?: TGTabLayout;
 }
+
+export interface TGTabLayout { rows: number[][] }
 
 export interface TGString {
   number: number;

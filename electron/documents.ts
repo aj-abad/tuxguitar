@@ -1,15 +1,18 @@
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { applySongEdits, type SongEdit } from "../shared/editor";
 import { parseTgFile, validateFirstBeatPreciseStart } from "../shared/tg-reader";
 import { writeTgFile } from "../shared/tg-writer";
+import { parseTgxFile, writeTgxFile } from '../shared/tgx';
+import type { TGSong } from '../shared/model';
 
 /** Main-process ownership keeps paths and original archive bytes out of the renderer. */
 export class SongDocument {
   readonly id = randomUUID();
   readonly source: Uint8Array;
-  readonly song;
+  readonly song: TGSong;
+  private readonly tgSource?: Uint8Array;
   private diskBytes: Buffer;
   path: string;
 
@@ -17,7 +20,14 @@ export class SongDocument {
     this.path = resolve(path);
     this.diskBytes = readFileSync(this.path);
     this.source = new Uint8Array(this.diskBytes);
-    this.song = parseTgFile(this.source);
+    if (extname(this.path).toLowerCase() === '.tgx') {
+      const parsed = parseTgxFile(this.source);
+      this.song = parsed.song;
+      this.tgSource = parsed.sourceTg;
+    } else {
+      this.song = parseTgFile(this.source);
+      this.tgSource = this.source;
+    }
     validateFirstBeatPreciseStart(this.song);
   }
 
@@ -29,9 +39,19 @@ export class SongDocument {
     return applySongEdits(this.song, edits);
   }
 
+  requiresTgx(edits: SongEdit[]) {
+    return !this.tgSource || this.editedSong(edits).tracks.some(track => !!track.tabLayout);
+  }
+
   save(path: string, edits: SongEdit[]) {
     const target = resolve(path);
-    const bytes = writeTgFile(this.source, edits);
+    const song = this.editedSong(edits);
+    const extension = extname(target).toLowerCase();
+    if (!['.tg', '.tgx'].includes(extension)) throw new Error('Use a filename ending in .tgx or .tg.');
+    if (extension === '.tg' && this.requiresTgx(edits)) throw new Error('Save as .tgx to keep the tab design.');
+    const musicEdits = edits.filter(edit => !('kind' in edit && edit.kind === 'layout.set'));
+    const tgBytes = this.tgSource ? writeTgFile(this.tgSource, musicEdits) : undefined;
+    const bytes = extension === '.tgx' ? writeTgxFile(song, tgBytes) : tgBytes!;
     const samePath = process.platform === "win32" ? target.toLowerCase() === this.path.toLowerCase() : target === this.path;
     if (samePath && (!existsSync(target) || !readFileSync(target).equals(this.diskBytes))) {
       throw new Error("This file changed outside Tabbycat. Use Save As to keep both versions.");

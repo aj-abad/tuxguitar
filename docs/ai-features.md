@@ -89,7 +89,7 @@ The model cannot reason about raw fret numbers. It needs pitches.
 
 The model must emit tool calls, **not** free text. "Play an F on the 6th string, 1st fret" is useless; `{"s":6,"f":1}` is applyable.
 
-Enforce via tool use + JSON schema. The schema mirrors the [TGX note/beat shape](tgx-format.md#note). The model fills bars by calling tools; the harness validates each call at the tool layer and the model retries on mismatch.
+Enforce via tool use + JSON schema. The schema mirrors the song model in `shared/model.ts` used by [TGX v2](tgx-format.md). The model fills bars by calling tools; the harness validates each call at the tool layer and the model retries on mismatch.
 
 Suggested tools:
 

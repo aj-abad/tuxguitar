@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell } from "electron";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { release } from 'node:os';
 import { basename, extname, isAbsolute, join, normalize } from "node:path";
 import {
   IpcChannels,
@@ -104,7 +105,7 @@ let saveDialogPromise: Promise<{ fileName: string } | null> | null = null;
 
 async function runOpenFileDialog(): Promise<OpenDocument | null> {
   const { canceled, filePaths } = await dialog.showOpenDialog(getWin()!, {
-    filters: [{ name: "TuxGuitar Files", extensions: SONG_FILE_EXTENSIONS }],
+    filters: [{ name: "Tablature files", extensions: SONG_FILE_EXTENSIONS }],
     properties: ["openFile"],
   });
   if (canceled || filePaths.length === 0) return null;
@@ -134,14 +135,15 @@ async function stopPlayback(): Promise<void> {
 async function runSave(request: DocumentEdits, saveAs: boolean) {
   const document = requireDocument(request);
   let path = document.path;
-  if (saveAs) {
+  const needsTgx = document.requiresTgx(request.edits);
+  if (saveAs || needsTgx && extname(path).toLowerCase() !== '.tgx') {
     const result = await dialog.showSaveDialog(getWin()!, {
-      defaultPath: path,
-      filters: [{ name: "TuxGuitar Files", extensions: ["tg"] }],
+      defaultPath: path.replace(/\.tg$/i, '.tgx'),
+      filters: [{ name: 'Tabbycat document', extensions: ['tgx'] }, ...(!needsTgx ? [{ name: 'TuxGuitar file', extensions: ['tg'] }] : [])],
     });
     if (result.canceled || !result.filePath) return null;
     path = result.filePath;
-    if (extname(path).toLowerCase() !== ".tg") throw new Error("Use a filename ending in .tg.");
+    if (!isSupportedSongFile(path)) throw new Error('Use a filename ending in .tgx or .tg.');
   }
   requireDocument(request); // the same document must still be open after the dialog
   return document.save(path, request.edits);
@@ -282,11 +284,13 @@ function buildAppMenu(): void {
 // ---- window ----------------------------------------------------------------
 
 function createWindow() {
+  const acrylic = process.platform === 'win32' && Number(release().split('.')[2]) >= 22621;
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
     ...(process.platform === "darwin" ? { titleBarStyle: "hidden" as const, transparent: true } : {}),
-    backgroundColor: process.platform === "darwin" ? "#00000000" : "#18181b",
+    ...(acrylic ? { backgroundMaterial: 'acrylic' as const } : {}),
+    backgroundColor: process.platform === "darwin" || acrylic ? "#00000000" : "#292b32",
     show: process.env.TG_SMOKE !== "1" && process.env.TG_HEADLESS !== "1",
     webPreferences: {
       preload: join(__dirname, "preload.js"),

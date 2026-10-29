@@ -4,6 +4,33 @@ import type { TGBeat, TGDuration, TGNote, TGVoice } from "./model";
 import { parseTgFile } from "./tg-reader";
 import { modelSignature } from "./model-signature";
 import { parseXmlSource, sourceElement, SourceElement } from "./xml-source";
+import { endingNumbers } from './repeat-edits';
+
+function setNumberText(node: SourceElement, value: number): void {
+  if (/\/>$/.test(node.opening)) {
+    node.opening = node.opening.replace(/\/>$/, '>');
+    node.closing = `</${node.name}>`;
+  }
+  // The numeric value changes; extension elements, comments and attributes stay.
+  node.content = [String(value), ...node.content.filter(item => item instanceof SourceElement || /^\s*<(?:!--|\?)/.test(item))];
+}
+
+function patchRepeat(song: SourceElement, patch: Extract<ScorePatch, { kind: 'header.repeat' }>): void {
+  const header = song.child('TGMeasureHeader', patch.measure), existing = header.elements(patch.field);
+  if (!patch.value) { existing.forEach(node => header.remove(node)); return; }
+  const node = existing[0] ?? sourceElement(patch.field);
+  if (patch.field === 'repeatClose') setNumberText(node, patch.value);
+  else if (patch.field === 'repeatAlternative') {
+    const alternatives = node.elements('alternative');
+    node.replaceElements('alternative', endingNumbers(patch.value).map((number, index) => {
+      const alternative = alternatives[index]?.clone() ?? sourceElement('alternative');
+      setNumberText(alternative, number);
+      return alternative;
+    }));
+  }
+  if (!existing.length) header.insert(node);
+  for (const duplicate of existing.slice(1)) header.remove(duplicate);
+}
 
 function durationNode(duration: TGDuration): SourceElement {
   const node = sourceElement("duration");
@@ -39,6 +66,8 @@ function beatNode(beat: TGBeat): SourceElement {
   return node;
 }
 function patchXml(song: SourceElement, patch: ScorePatch): void {
+  if (patch.kind === 'track.layout') throw new Error('Save as .tgx to keep the tab design.');
+  if (patch.kind === 'header.repeat') { patchRepeat(song, patch); return; }
   const a = patch.address;
   const measure = song.child("TGTrack", a.track).child("TGMeasure", a.measure);
   if (patch.kind === "measure.columns") {
@@ -74,6 +103,29 @@ function patchXml(song: SourceElement, patch: ScorePatch): void {
     case "note.remove": voice.remove(voice.child("note", patch.address.note)); break;
     case "note.fret": voice.child("note", patch.address.note).attribute("value", patch.fret); break;
     case "note.untie": voice.child("note", patch.address.note).attribute("tiedNote", null); break;
+    case "note.tie": voice.child("note", patch.address.note).attribute("tiedNote", patch.tied ? true : null); break;
+    case "note.effect": {
+      const note = voice.child('note', patch.address.note), existing = note.elements(patch.effect);
+      if (!patch.value) existing.forEach(node => note.remove(node));
+      else if (!existing.length) note.insert(sourceElement(patch.effect));
+      break;
+    }
+    case "note.bend": {
+      const note = voice.child('note', patch.address.note), existing = note.elements('bend');
+      if (!patch.bend) existing.forEach(node => note.remove(node));
+      else {
+        const bend = existing[0] ?? sourceElement('bend');
+        const points = bend.elements('point');
+        bend.replaceElements('point', patch.bend.points.map((point, index) => {
+          const node = points[index]?.clone() ?? sourceElement('point');
+          node.attribute('position', point.position); node.attribute('value', point.value);
+          return node;
+        }));
+        if (!existing.length) note.insert(bend);
+        for (const duplicate of existing.slice(1)) note.remove(duplicate);
+      }
+      break;
+    }
   }
 }
 

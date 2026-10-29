@@ -1,5 +1,6 @@
 import { PRECISE_FACTOR, WHOLE_PRECISE_DURATION, type TGBeat, type TGDuration, type TGSong } from "./model";
 import { durationPrecise, splitRests, voiceAt, type BeatAddress } from "./score-edits";
+import { techniqueNeighbor } from './technique-edits';
 
 /** Source provenance lets XML and editor identities follow the same operation. */
 export interface ColumnSource { source: number; clone: boolean; beat: TGBeat }
@@ -31,7 +32,11 @@ export function changeColumns(song: TGSong, change: ColumnChange): ColumnSource[
   if (first < 0 || last < first) throw new Error("Select active columns in one measure.");
   const linked = (beat: TGBeat) => beat.voices[a.voice]?.notes.some(n => n.tiedNote || n.effect.slide || n.effect.hammer || n.effect.letRing);
   const next = track.measures[a.measure + 1]?.beats.find(b => b.voices[a.voice] && !b.voices[a.voice].empty);
-  if (active.some(c => linked(c.beat)) || next?.voices[a.voice]?.notes.some(n => n.tiedNote)) {
+  const incoming = active.some(c => c.beat.voices[a.voice].notes.some(note => {
+    const previous = techniqueNeighbor(song, { ...a, beat: c.source, string: note.string }, -1);
+    return previous && previous.address.measure < a.measure && (previous.note.effect.slide || previous.note.effect.hammer);
+  }));
+  if (incoming || active.some(c => linked(c.beat)) || next?.voices[a.voice]?.notes.some(n => n.tiedNote)) {
     throw new Error("Move or duplicate plain columns first. Ties, slides, hammer-ons and let-ring connections are not supported by these commands yet.");
   }
   const start = header.start * PRECISE_FACTOR;

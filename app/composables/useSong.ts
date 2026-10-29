@@ -1,10 +1,12 @@
 import { computed } from "vue";
 import {
   createEditor, moveSelection, noteAt, cursorNote, cursorKey, voiceAt,
-  redoEdit, setFret, undoEdit, deleteNote, setRest, setDuration, selectEditorCursor, rearrangeColumns, beatAddresses, selectedColumns,
+  redoEdit, setFret, undoEdit, deleteNote, setRest, setDuration, selectEditorCursor, selectEditorCells, rearrangeColumns, beatAddresses, selectedColumns, selectedCells, selectionEditReason,
+  techniqueStates, toggleTechnique, setBend, clearTechniques,
+  repeatState, toggleRepeat, setRepeatPlays, setEndingNumbers, clearRepeats, setTabDesign,
   type EditorState, type NoteAddress, type EditorCursor, type BeatAddress,
 } from "~~/shared/editor";
-import type { TGDuration } from "~~/shared/model";
+import type { TGDuration, TGEffectPoints, TGTabLayout } from "~~/shared/model";
 import type { DocumentCommand, DocumentEdits } from "~~/shared/ipc";
 import type { TabCommandId } from "~~/shared/tab-commands";
 
@@ -17,14 +19,14 @@ export function useSong() {
   const allowDocumentUnload = useState("allowDocumentUnload", () => false);
   const song = computed(() => editor.value?.song ?? null);
   const selection = computed(() => editor.value?.selection ?? null);
-  const selectedNote = computed(() => song.value && selection.value ? cursorNote(song.value, selection.value) : null);
+  const selectedNote = computed(() => song.value && selection.value && editor.value?.cellSelection?.length !== 0 ? cursorNote(song.value, selection.value) : null);
   const selectedVoice = computed(() => song.value && selection.value ? voiceAt(song.value, selection.value) : null);
+  const selectionRestriction = computed(() => selectionEditReason(editor.value));
+  const techniques = computed(() => techniqueStates(editor.value));
+  const repeats = computed(() => repeatState(editor.value));
   const hasSelectedNotes = computed(() => {
-    const state = editor.value, cursor = selection.value;
-    if (!state || !cursor) return false;
-    const first = Math.min(cursor.string, state.anchor?.string ?? cursor.string);
-    const last = Math.max(cursor.string, state.anchor?.string ?? cursor.string);
-    return selectedColumns(state).some(a => voiceAt(state.song, a).notes.some(n => state.selectionMode === 'columns' || (n.string >= first && n.string <= last)));
+    const state = editor.value;
+    return !!state && selectedCells(state).some(cursor => voiceAt(state.song, cursor).notes.some(note => note.string === cursor.string));
   });
   const selectedColumnsHaveNotes = computed(() => editor.value && selectedColumns(editor.value).some(a => voiceAt(editor.value!.song, a).notes.length > 0));
   const dirty = computed(() => !!editor.value && editor.value.signature !== editor.value.savedSignature);
@@ -97,6 +99,14 @@ export function useSong() {
     if (active instanceof HTMLInputElement) active.blur();
     digitEntry = null;
     editor.value = selectEditorCursor(editor.value, cursor, extend, mode);
+  }
+
+  function selectCells(cells: readonly EditorCursor[], focus: EditorCursor, anchor: EditorCursor | null = null) {
+    if (!editor.value || loading.value) return;
+    const active = window.document.activeElement;
+    if (active instanceof HTMLInputElement) active.blur();
+    digitEntry = null;
+    editor.value = selectEditorCells(editor.value, cells, focus, anchor);
   }
 
   function selectBeat(address: BeatAddress) {
@@ -176,15 +186,29 @@ export function useSong() {
       "column.copyRight": () => changeStructure(state => rearrangeColumns(state, 1, true)),
       "note.delete": () => changeStructure(deleteNote), "voice.rest": () => changeStructure(setRest),
       "duration.longer": () => stepDuration(false), "duration.shorter": () => stepDuration(true), "duration.dot": toggleDot,
+      'technique.bend': () => changeStructure(state => toggleTechnique(state, 'bend')),
+      'technique.slide': () => changeStructure(state => toggleTechnique(state, 'slide')),
+      'technique.hammer-on': () => changeStructure(state => toggleTechnique(state, 'hammer-on')),
+      'technique.pull-off': () => changeStructure(state => toggleTechnique(state, 'pull-off')),
+      'technique.tie': () => changeStructure(state => toggleTechnique(state, 'tie')),
+      'technique.clear': () => changeStructure(clearTechniques),
+      'repeat.start': () => changeStructure(state => toggleRepeat(state, 'start')),
+      'repeat.end': () => changeStructure(state => toggleRepeat(state, 'end')),
+      'repeat.ending': () => changeStructure(state => toggleRepeat(state, 'ending')),
+      'repeat.clear': () => changeStructure(clearRepeats),
     };
     actions[id]();
   }
 
-  return { editor, song, selection, selectedNote, selectedVoice, hasSelectedNotes, selectedColumnsHaveNotes, fileName, dirty, canUndo, canRedo,
+  return { editor, song, selection, selectedNote, selectedVoice, hasSelectedNotes, selectedColumnsHaveNotes, selectionRestriction, fileName, dirty, canUndo, canRedo,
     loading, error, allowDocumentUnload, snapshot, reportError, runDocumentCommand,
     openFile: () => runDocumentCommand("open"), save: () => runDocumentCommand("save"),
     openDroppedFile: (file: File) => runDocumentCommand("open", file),
-    saveAs: () => runDocumentCommand("saveAs"), selectNote, selectBeat, selectCursor,
+    saveAs: () => runDocumentCommand("saveAs"), selectNote, selectBeat, selectCursor, selectCells,
     removeNote: () => changeStructure(deleteNote), makeRest: () => changeStructure(setRest),
-    changeDuration, stepDuration, toggleDot, changeFret, enterDigit, undo, redo, navigate, runTabCommand, selectTrack };
+    changeDuration, stepDuration, toggleDot, changeFret, enterDigit, undo, redo, navigate, runTabCommand, selectTrack,
+    changeTabDesign: (track: number, layout: TGTabLayout | null) => changeStructure(state => setTabDesign(state, track, layout)),
+    techniques, changeBend: (bend: TGEffectPoints | null) => changeStructure(state => setBend(state, bend)),
+    repeats, changeRepeatPlays: (plays: number) => changeStructure(state => setRepeatPlays(state, plays)),
+    changeEndingNumbers: (numbers: number[]) => changeStructure(state => setEndingNumbers(state, numbers)) };
 }

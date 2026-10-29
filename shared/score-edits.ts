@@ -1,13 +1,17 @@
-import { PRECISE_FACTOR, WHOLE_PRECISE_DURATION, type TGBeat, type TGDuration, type TGNote, type TGSong, type TGVoice } from "./model";
+import { PRECISE_FACTOR, WHOLE_PRECISE_DURATION, type TGBeat, type TGDuration, type TGEffectPoints, type TGNote, type TGSong, type TGVoice, type TGTabLayout } from "./model";
+import { validateTabDesign } from './tab-design';
 import { modelSignature } from "./model-signature";
 import { changeColumns, type ColumnSource } from "./tab-columns";
+import { techniquePatches, type TechniqueEdit } from './technique-edits';
+import { repeatPatches, type RepeatEdit } from './repeat-edits';
 
 /** Indices belong to the current TG model, never compacted renderer indices. */
 export interface BeatAddress { track: number; measure: number; beat: number; voice: number }
 export interface NoteAddress extends BeatAddress { note: number }
 export interface EditorCursor extends BeatAddress { string: number }
 export interface FretEdit { address: NoteAddress; fret: number }
-export type SongEdit = FretEdit
+export type SongEdit = FretEdit | TechniqueEdit | RepeatEdit
+  | { kind: 'layout.set'; track: number; layout: TGTabLayout | null }
   | { kind: "note.set"; cursor: EditorCursor; fret: number }
   | { kind: "note.remove"; cursor: EditorCursor }
   | { kind: "voice.rest"; address: BeatAddress }
@@ -16,8 +20,14 @@ export type SongEdit = FretEdit
 
 /** Validated changes also drive the source-preserving XML writer. */
 export type ScorePatch =
+  | { kind: 'track.layout'; track: number; layout: TGTabLayout | undefined }
+  | { kind: 'header.repeat'; measure: number; field: 'repeatOpen'; value: boolean }
+  | { kind: 'header.repeat'; measure: number; field: 'repeatClose' | 'repeatAlternative'; value: number }
   | { kind: "note.fret"; address: NoteAddress; fret: number }
   | { kind: "note.untie"; address: NoteAddress }
+  | { kind: "note.tie"; address: NoteAddress; tied: boolean }
+  | { kind: "note.effect"; address: NoteAddress; effect: 'slide' | 'hammer'; value: boolean }
+  | { kind: "note.bend"; address: NoteAddress; bend: TGEffectPoints | undefined }
   | { kind: "note.add"; address: NoteAddress; note: TGNote }
   | { kind: "note.remove"; address: NoteAddress }
   | { kind: "voice.duration"; address: BeatAddress; duration: TGDuration }
@@ -93,6 +103,16 @@ function newNote(string: number, fret: number): TGNote {
 }
 
 function applyPatch(song: TGSong, patch: ScorePatch): TGSong {
+  if (patch.kind === 'track.layout') {
+    const tracks = song.tracks.slice();
+    tracks[patch.track] = { ...tracks[patch.track], tabLayout: patch.layout };
+    return { ...song, tracks };
+  }
+  if (patch.kind === 'header.repeat') {
+    const measureHeaders = song.measureHeaders.slice();
+    measureHeaders[patch.measure] = { ...measureHeaders[patch.measure], [patch.field]: patch.value };
+    return { ...song, measureHeaders };
+  }
   const a = patch.address;
   const tracks = song.tracks.slice();
   const track = { ...tracks[a.track]!, measures: tracks[a.track]!.measures.slice() };
@@ -115,6 +135,13 @@ function applyPatch(song: TGSong, patch: ScorePatch): TGSong {
         case "note.remove": voice.notes.splice(patch.address.note, 1); break;
         case "note.fret": voice.notes[patch.address.note] = { ...voice.notes[patch.address.note]!, value: patch.fret }; break;
         case "note.untie": voice.notes[patch.address.note] = { ...voice.notes[patch.address.note]!, tiedNote: false }; break;
+        case "note.tie": voice.notes[patch.address.note] = { ...voice.notes[patch.address.note]!, tiedNote: patch.tied }; break;
+        case "note.effect": case "note.bend": {
+          const note = voice.notes[patch.address.note]!;
+          voice.notes[patch.address.note] = { ...note, effect: { ...note.effect,
+            ...(patch.kind === 'note.bend' ? { bend: patch.bend } : { [patch.effect]: patch.value }) } };
+          break;
+        }
       }
     }
   }
@@ -225,6 +252,15 @@ export function applySongEdits(song: TGSong, edits: SongEdit[], onPatch?: (patch
         }
         position += durationPrecise(duration);
       }
+    } else if (edit.kind === 'layout.set') {
+      if (!Number.isInteger(edit.track) || !result.tracks[edit.track]) throw new Error('Select a track to design.');
+      const track = result.tracks[edit.track];
+      const layout = edit.layout === null ? undefined : validateTabDesign(edit.layout, track.measures.length);
+      if (modelSignature(layout ?? null) !== modelSignature(track.tabLayout ?? null)) emit({ kind: 'track.layout', track: edit.track, layout });
+    } else if (edit.kind === 'technique.set') {
+      for (const patch of techniquePatches(result, edit)) emit(patch);
+    } else if (edit.kind === 'repeat.start' || edit.kind === 'repeat.end' || edit.kind === 'repeat.ending') {
+      for (const patch of repeatPatches(result, edit)) emit(patch);
     } else if (edit.kind === "column.move" || edit.kind === "column.duplicate") {
       const columns = changeColumns(result, edit);
       if (columns) emit({ kind: "measure.columns", address: edit.address, columns });

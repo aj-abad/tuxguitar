@@ -28,8 +28,10 @@ import * as alphaTab from "@coderline/alphatab";
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { tgSongToScore } from "~~/shared/tg-to-alphatab";
 import { beatKey, type NoteAddress, type BeatAddress } from "~~/shared/editor";
+import { resolveTabKey } from '~~/shared/tab-commands';
 
-const { song, fileName, selection, loading, selectNote, selectBeat, enterDigit, navigate, removeNote, makeRest, stepDuration, toggleDot } = useSong();
+const { song, fileName, selection, loading, selectNote, selectBeat, selectCursor, enterDigit, navigate, runTabCommand } = useSong();
+const { bindings } = useTabKeymap();
 const editorSurface = ref<HTMLElement | null>(null);
 const surface = ref<HTMLElement | null>(null);
 const container = ref<HTMLElement | null>(null);
@@ -49,21 +51,16 @@ function focusEditor() {
 }
 
 function editKey(event: KeyboardEvent) {
-  if (loading.value || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
-  if (/^[0-9]$/.test(event.key)) {
-    event.preventDefault();
-    if (!event.repeat) enterDigit(event.key);
-  } else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
-    event.preventDefault();
-    navigate(event.key);
-  } else if (["Delete", "Backspace", "r", "R", "+", "=", "-", "."].includes(event.key)) {
-    event.preventDefault();
-    if (event.repeat) return;
-    if (event.key === "Delete" || event.key === "Backspace") removeNote();
-    else if (event.key.toLowerCase() === "r") makeRest();
-    else if (event.key === ".") toggleDot();
-    else stepDuration(event.key === "-");
-  }
+  if (loading.value || (event.target as HTMLElement)?.closest('input, textarea, select, [contenteditable]')) return;
+  const action = resolveTabKey(event, bindings.value);
+  if (!action) return;
+  event.preventDefault();
+  event.stopPropagation();
+  // Comparison rendering has a single-cell highlight, so navigation stays single-cell.
+  if (action.kind === 'navigate') navigate(action.direction);
+  else if (action.kind === 'digit') { if (!event.repeat) enterDigit(action.digit); }
+  else if (action.kind === 'command') { if (!event.repeat) runTabCommand(action.id); }
+  else if (selection.value) selectCursor(selection.value);
 }
 
 function updateHighlights() {

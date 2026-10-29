@@ -217,7 +217,7 @@ function parseMeasureHeaders(nodes: unknown[]): TGMeasureHeader[] {
       | undefined;
     if (raNode) {
       for (const alt of arr(raNode["alternative"] as unknown[])) {
-        repeatAlternative += Math.pow(2, num(alt) - 1);
+        repeatAlternative += Math.pow(2, num(tagText(alt)) - 1);
       }
     }
 
@@ -245,7 +245,7 @@ function parseMeasureHeaders(nodes: unknown[]): TGMeasureHeader[] {
       tempoBase,
       tempoDotted,
       repeatOpen: has(node, "repeatOpen"),
-      repeatClose: num(node["repeatClose"], 0),
+      repeatClose: num(tagText(node["repeatClose"]), 0),
       repeatAlternative,
       marker,
       tripletFeel: parseTripletFeel(str(node["tripletFeel"])),

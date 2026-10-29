@@ -91,5 +91,68 @@ Test("seek restores channel controls; loading another song resets them", () =>
     renderer.Render(left, right);
     Check(left.All(value => value == 0), "Loading an empty score left old notes or effects ringing.");
 });
+
+List<MidiMessage> PitchSetup(int channel, int pan = 64) => [
+    new(0, MidiKind.Program, channel, 80), // A sustained lead makes pitch measurable.
+    new(0, MidiKind.Control, channel, 7, 100), new(0, MidiKind.Control, channel, 10, pan),
+    new(0, MidiKind.Control, channel, 91, 0), new(0, MidiKind.Control, channel, 93, 0),
+    new(0, MidiKind.Control, channel, 101, 0), new(0, MidiKind.Control, channel, 100, 0),
+    new(0, MidiKind.Control, channel, 6, 12), new(0, MidiKind.Control, channel, 38, 0),
+    new(0, MidiKind.Control, channel, 101, 127), new(0, MidiKind.Control, channel, 100, 127)
+];
+int Wheel(double semitones) => (int)Math.Round(8192 + semitones * 8192 / 12);
+double Frequency(float[] samples, int offset = 6000)
+{
+    // Autocorrelation over 300-650 Hz, followed by sub-sample peak refinement.
+    // This measures the produced PCM rather than inspecting MIDI controller state.
+    const int minimumLag = 74, maximumLag = 160, count = 10000;
+    var correlations = new double[maximumLag + 2];
+    for (var lag = minimumLag - 1; lag <= maximumLag + 1; lag++)
+    {
+        double cross = 0, energyA = 0, energyB = 0;
+        for (var index = offset; index < offset + count; index++)
+        {
+            var a = samples[index]; var b = samples[index + lag];
+            cross += a * b; energyA += a * a; energyB += b * b;
+        }
+        correlations[lag] = cross / Math.Sqrt(energyA * energyB);
+    }
+    var best = Enumerable.Range(minimumLag, maximumLag - minimumLag + 1).MaxBy(lag => correlations[lag]);
+    var delta = 0.5 * (correlations[best - 1] - correlations[best + 1]) /
+        (correlations[best - 1] - 2 * correlations[best] + correlations[best + 1]);
+    return 48000 / (best + delta);
+}
+Test("real PCM follows quarter-tone, full-tone and wide pre-bends and releases", () =>
+{
+    foreach (var semitones in new[] { 0.5, 2.0, 6.0, -5.0 })
+    {
+        var messages = PitchSetup(0);
+        messages.AddRange([new(0, MidiKind.PitchBend, 0, Wheel(semitones)), new(0, MidiKind.NoteOn, 0, 69, 100),
+            new(960, MidiKind.PitchBend, 0, 8192), new(1920, MidiKind.NoteOff, 0, 69)]);
+        var renderer = new SynthRenderer(soundFont, 48000);
+        renderer.Load(new(messages, 960, 48000));
+        var left = new float[48000]; var right = new float[48000];
+        renderer.Render(left, right);
+        var expected = 440 * Math.Pow(2, semitones / 12);
+        Check(Math.Abs(Frequency(left) - expected) < 3, $"Wrong PCM pitch for {semitones} semitones: {Frequency(left):F2} Hz, expected {expected:F2}.");
+        Check(Math.Abs(Frequency(left, 30000) - 440) < 3, "Release did not return to the unbent pitch.");
+        renderer.Seek(0);
+        renderer.Render(left, right);
+        Check(Math.Abs(Frequency(left) - expected) < 3, "Restart lost the pre-bend or range setup.");
+    }
+});
+Test("bending one channel leaves the other chord voice in tune", () =>
+{
+    var messages = PitchSetup(0, 0);
+    messages.AddRange(PitchSetup(1, 127));
+    messages.AddRange([new(0, MidiKind.PitchBend, 1, Wheel(2)), new(0, MidiKind.NoteOn, 0, 69, 100),
+        new(0, MidiKind.NoteOn, 1, 69, 100), new(960, MidiKind.NoteOff, 0, 69), new(960, MidiKind.NoteOff, 1, 69)]);
+    var renderer = new SynthRenderer(soundFont, 48000);
+    renderer.Load(new(messages, 960, 48000));
+    var left = new float[24000]; var right = new float[24000];
+    renderer.Render(left, right);
+    Check(Math.Abs(Frequency(left) - 440) < 3, "The unbent chord voice changed pitch.");
+    Check(Math.Abs(Frequency(right) - 440 * Math.Pow(2, 2.0 / 12)) < 3, "The bent chord voice stayed at its original pitch.");
+});
 Console.WriteLine($"Audio checks: {passed} passed, {failed} failed.");
 return failed == 0 ? 0 : 1;

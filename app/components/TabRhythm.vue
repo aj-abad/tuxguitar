@@ -9,8 +9,9 @@
       </g>
     </template>
     <template v-else>
-      <ellipse cx="0" cy="0" rx="5" ry="3.6" transform="rotate(-18)" :fill="duration.value <= 2 ? 'var(--tab-paper)' : 'currentColor'" stroke="currentColor" stroke-width="1.2" />
-      <line v-if="duration.value > 1" :x1="RHYTHM_STEM_X" :x2="RHYTHM_STEM_X" y1="0" :y2="-RHYTHM_STEM_HEIGHT" stroke="currentColor" stroke-width="1.3" />
+      <path d="M -6 7 L 1.5 -7 L 6 -7 L -1.5 7 Z" data-testid="tab-rhythm-slash"
+        :fill="duration.value <= 2 ? 'var(--tab-paper)' : 'currentColor'" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+      <line v-if="duration.value > 1" :x1="RHYTHM_STEM_X" :x2="RHYTHM_STEM_X" y1="-7" :y2="-RHYTHM_STEM_HEIGHT" stroke="currentColor" stroke-width="1.3" />
       <path v-for="i in beamed ? 0 : flags" :key="i" data-testid="tab-flag" :d="`M4.5 ${-25 + (i - 1) * 5} Q17 ${-20 + (i - 1) * 5} 11 ${-12 + (i - 1) * 5}`" fill="none" stroke="currentColor" stroke-width="1.5" />
     </template>
     <circle v-for="i in dots" :key="i" :cx="9 + i * 4" cy="-2" r="1.6" />

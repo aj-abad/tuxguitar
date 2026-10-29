@@ -37,6 +37,8 @@ body {
   line-height: 0.75rem;
 }
 
+.app-chrome { background: rgb(30 31 37 / .64); }
+
 .editor-button {
   display: inline-flex;
   align-items: center;

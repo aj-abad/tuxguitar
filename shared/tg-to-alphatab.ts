@@ -10,6 +10,7 @@ import type {
 } from "./model";
 import { QUARTER_TIME } from "./model";
 import type { NoteAddress, BeatAddress } from "./editor";
+import { resolveEndings } from './tab-structure';
 
 type NoteMapping = (note: alphaTab.model.Note, address: NoteAddress) => void;
 type BeatMapping = (beat: alphaTab.model.Beat, address: BeatAddress) => void;
@@ -24,13 +25,16 @@ export function tgSongToScore(song: TGSong, mapNote?: NoteMapping, mapBeat?: Bea
   score.copyright = song.copyright;
 
   let prevTempo = -1;
-  for (const header of song.measureHeaders) {
+  const endings = new Map<number, number>();
+  for (const span of resolveEndings(song.measureHeaders)) for (let index = span.start; index <= span.end; index++) endings.set(index, span.mask);
+  for (const [index, header] of song.measureHeaders.entries()) {
     const mb = new alphaTab.model.MasterBar();
     mb.timeSignatureNumerator = header.timeSignature.numerator;
     mb.timeSignatureDenominator = header.timeSignature.denominator;
     mb.isRepeatStart = header.repeatOpen;
+    mb.alternateEndings = endings.get(index) ?? 0;
     if (header.repeatClose > 0) {
-      mb.repeatCount = header.repeatClose;
+      mb.repeatCount = header.repeatClose + 1;
     }
     if (header.marker) {
       mb.section = new alphaTab.model.Section();

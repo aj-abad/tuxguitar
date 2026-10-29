@@ -6,7 +6,7 @@
       <path v-for="(path, index) in technique.paths" :key="index" :d="path.d" :data-technique-part="path.kind"
         class="tab-technique-line" :stroke-dasharray="path.kind === 'hold' ? '3 3' : undefined" />
       <text v-for="(label, index) in technique.labels" :key="index" :x="label.x" :y="label.y"
-        text-anchor="middle" class="tab-technique-label">{{ label.text }}</text>
+        text-anchor="middle" class="tab-technique-label" :class="{ 'tab-bend-label': technique.kind === 'bend' }">{{ label.text }}</text>
     </g>
   </g>
 </template>
